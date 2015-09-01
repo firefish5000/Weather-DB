@@ -69,6 +69,9 @@ my $STORE={};
 ######
 # MAIN
 ######
+sub NO_OP {
+	return;
+	my $IFC;
 my $IFC_Examp = {
 	Time=>0, # The time the forecast refers to
 	Range=>'24h', # How long the forecast refers to.(current=0s,minutcast=60s,hourly=60min,daily=24hr)
@@ -91,8 +94,14 @@ my $IFC_Examp = {
 	Feel=>{
 		Temp=>0,
 	},
-
 };
+my $FC_Example={
+	Current=>$IFC,
+	Minutes=>{minsec1=>$IFC,minsec2=>$IFC},
+	Hours=>{HrSec1=>$IFC,HrSec2=>$IFC},
+	Days=>{DaySec1=>$IFC,DaySec2=>$IFC},
+};
+}
 $STORE=retrieve($STORE_FILE) if ( -e $STORE_FILE);
 #StoreUpdate();
 #die 'PAUSED';
@@ -152,9 +161,15 @@ sub Parser() { # Parses Extended Forcast
 	my $Root=Build_Html_Tree( 'daily-weather-forecast');
 	#my $Root=Build_Html_Tree( $Location);
 	my $ShortCast = $Root->findnodes('//div[@id="feed-tabs"]');
+	my $FC = {
+		Current=>,
+		Minutes=>,
+		Hours=>,
+		Days=>,
+	}
 #	foreach my $day ();
 	#say Dumper $Root;
-	say Dumper $ShortCast;
+	say Dumper $FC;
 }
 
 ### TAB PARSERS
@@ -169,7 +184,8 @@ sub Daily_Parser() {
 	my $day=shift//1;
 	my $Root=Build_Html_Tree( 'daily-weather-forecast',"?day=$day" );
 	my $FC = {}; # ForCast
-	$FC->{Date}=DateParser($Root);
+	$FC->{Time}=DateParser($Root);
+	$FC->{Range}=ToSec('24h');
 	$FC->{LastUpdate}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
 		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
@@ -180,9 +196,12 @@ sub Daily_Parser() {
 		say Dumper $FC;
 	}
 }
-sub Now_Parser() {
+sub Current_Parser() {
 	my $Root=Build_Html_Tree('current-weather');
 	my $FC = {}; # ForCast
+	$FC->{Time}=0;
+	$FC->{Range}=0;
+	$FC->{LastUpdate}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-now"]/div') ) {
 		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="more-info"]')->[0];
@@ -207,13 +226,25 @@ sub Hourly_Parser() {
 	my $i=0;
 	my $FC={};
 	my @FCs;
+	$FC->{Range}=ToSec('1h');
+	$FC->{LastUpdate}=time;
+	my $first=1;
+	my $time;
 	foreach my $header ($Hourly->findnodes('./thead/tr/th')) {
 		next if ($i++ == 0 && scalar $header->findnodes('./@class="first"') == 1 );
-		my ($time) = $header->findnodes_as_string('.') =~ m{(\d\d?(?:am|pm))} or die "Could Not Find Time in Detail-Hourly header<" . $header->findnodes_as_string('.') .">";
-		say $time;
+		if ($first) {
+			($time) = $header->findnodes_as_string('.') =~ m{(\d\d?(?:am|pm))} or die "Could Not Find Time in Detail-Hourly header<" . $header->findnodes_as_string('.') .">";
+			$time = qx{date --date='$time' +%s}; # FIXME remove all qx/syscalls
+			chomp($time);
+			$first=0;
+		}
 		my $hfc = {};
 		$hfc->{Time}=$time;
+		$hfc->{Range}=ToSec('1h');
+		$hfc->{LastUpdate}=time;
+		$FC->{$time}=$hfc;
 		push(@FCs,$hfc);
+		$time+=ToSec('1h');
 	}
 	foreach my $row ($Hourly->findnodes('./tr')) {
 		my $class = $row->findvalue('./@class');
@@ -227,7 +258,8 @@ sub Hourly_Parser() {
 			OverwriteTable($hfc,NamedParser({name=>$name,val=>$val,nval=>$nval}));
 		}
 	}
-	say Dumper @FCs;
+	say Dumper $FC;
+	return $FC;
 }
 sub Minut_Parser() {
 	my $Root=Build_Html_Tree('minute-weather-forecast' );
@@ -239,11 +271,30 @@ sub Minut_Parser() {
 		}
 	}
 	my $FC={};
+	my $first=1;
+	my $date;
 	foreach my $Min (@minutes) {
 		my $mfc = {};
-		$mfc->{Time} = $Min->findvalue('./span[@class="time"]');
-		$mfc->{Type} = $Min->findvalue('./span[@class="type"]');
+		if ($first) {
+			my $hrmin = $Min->findvalue('./span[@class="time"]');
+			$date = qx{date --date='$hrmin' +%s}; # FIXME remove all qx/syscalls
+			chomp($date);
+			$first=0;
+		}
+		$mfc->{Time} = $date;
+		# FIXME NOTE TODO Possible Risk of Jumping Minutes. Add checks and a better converter.
+		#my $hrmin = $Min->findvalue('./span[@class="time"]');
+		#my $chkdate = qx{date --date='$hrmin' +%s}; # FIXME remove all qx/syscalls
+		#chomp($chkdate);
+		#my $chkhrmin =  qx{date --date='\@$date' +%H:%M};
+		#chomp($chkhrmin);
+		#Wrn 'Date ', $chkhrmin, ' Accu ', $Min->findvalue('./span[@class="time"]');
+		#Info 'Date ', $date, ' Accu ', $chkdate;
+		$mfc->{Weather}{Description} = $Min->findvalue('./span[@class="type"]');
+		$mfc->{Range} = ToSec('1m');
+		$mfc->{LastUpdate} = time;
 		$FC->{$mfc->{Time}} = $mfc;
+		$date+=ToSec('1m');
 	}
 	say Dumper $FC;
 }
@@ -275,7 +326,10 @@ sub DateParser() {
 	# Parsing the date from the site seems easier than determining weather day1 == pc's current day, tomarrow, or yesterday.
 	# Especialy when the current time is between 23:59 and 00:01.
 	my $Root=shift;
-	my $date = $Root->findvalue('//div[@id="feed-tabs"]/ul/li[contains(@class,"current")]/div/h4');
+	my ($month,$day) = $Root->findvalue('//div[@id="feed-tabs"]/ul/li[contains(@class,"current")]/div/h4') =~ m{^(\S+)\s+(\d+)$};
+	my $date = qx{date --date='$month $day' +%s};
+	use DateTime;
+	# return DateTime->new(month => $month, day => $day, time_zone => "America/Chicago")->epoche();
 	return $date;
 }
 sub NamedParser() {
@@ -502,7 +556,7 @@ sub __Read_Args {
 				shift @ARGV;
 			}
 			when (/test-now/i) {
-				Now_Parser();
+				Current_Parser();
 				shift @ARGV;
 			}
 			when (/test-hour/i) {
