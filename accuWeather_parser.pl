@@ -33,9 +33,9 @@ my $LocationID = "2201989";
 my $CONFIG = { };
 $CONFIG->{Lifetime}{Current}=ToSec('1m');
 $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
-$CONFIG->{Lifetime}{Minute}=ToSec('1m');
-$CONFIG->{Lifetime}{Hourly}=ToSec('10m');
-$CONFIG->{Lifetime}{Daily}=ToSec('1hr');
+$CONFIG->{Lifetime}{Minutes}=ToSec('1m');
+$CONFIG->{Lifetime}{Hours}=ToSec('10m');
+$CONFIG->{Lifetime}{Days}=ToSec('1hr');
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
@@ -66,6 +66,7 @@ $CONFIG->{Get}{Advisories}{Pending}=1;
 my $List;
 my $STORE_FILE='/home/beck/tmp/' . $Name . '.db';
 my $STORE={};
+my $FC={};
 ######
 # MAIN
 ######
@@ -118,24 +119,19 @@ store($STORE, $STORE_FILE);
 sub Build_Html_Tree {
 	my $path = shift;
 	my $query = shift//'';
-	#$mech->get( $Site . $path);
-	#$webkit->open( $Site . $path);
-	#$webkit->wait_for_page_to_load(15000);
 	my $page = join('/',$Site,$Location,$path,$LocationID ) . $query;
 	my $content = get( $page ) or die("Unable to fetch page <" . $page . ">!"); # lwp
 	#$lwp->wait_for_page_to_load(15000);
-	#my $AnimeTree = HTML::TreeBuilder::XPath->new_from_content($mech->content);
-	#my $content =  $webkit->view->get_dom_document->get_document_element->get_outer_html;
-	my $AnimeTree = HTML::TreeBuilder::XPath->new_from_content($content);
-	return $AnimeTree;
+	my $FCTree = HTML::TreeBuilder::XPath->new_from_content($content);
+	return $FCTree;
 }
 #########
 # STORAGE
 #########
 my $STORE_CNT=0;
 
-sub StoreInfo {
-	my $Page	= shift;
+sub StoreSection {
+	my $Key	= shift;
 	my $Tree	= shift || undef;
 	my $WeFetch = (defined $Tree) ? 0 : 1;
 	if ( IsOld($STORE->{Page}{$Page}{Info}{LastUpdate}) ) {
@@ -162,53 +158,73 @@ sub Parser() { # Parses Extended Forcast
 	#my $Root=Build_Html_Tree( $Location);
 	my $ShortCast = $Root->findnodes('//div[@id="feed-tabs"]');
 	my $FC = {
-		Current=>,
-		Minutes=>,
-		Hours=>,
-		Days=>,
-	}
+		Current=>GetCurrent(),
+		Minutes=>GetMinutes(),
+		Hours=>GetHours(),
+		Days=>GetDays(),
+	};
 #	foreach my $day ();
-	#say Dumper $Root;
-	say Dumper $FC;
+	Info Dumper $FC;
 }
 
 ### TAB PARSERS
 
 # Parse the daily tab
-sub Get_Daily() {
+sub GetDays() {
+	my $tfc = $FC->{Days}//{};
+	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Days});
 	for my $i (1..45) {
-		Daily_Parser($i)
+		my $day = Daily_Parser($i);
+		$tfc->{$day->{Time}}=$day;
 	}
+	return $tfc
+}
+sub GetHours() {
+	my $tfc = $FC->{Days}//{};
+	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Hours});
+	$tfc = Hourly_Parser();
+	return $tfc;
+}
+sub GetMinutes() {
+	my $tfc = $FC->{Minutes}//{};
+	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Minutes});
+	$tfc = Minut_Parser();
+	return $tfc;
+}
+sub GetCurrent() {
+	my $tfc = $FC->{Minutes}//{};
+	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Current});
+	$tfc = Current_Parser();
+	return $tfc;
 }
 sub Daily_Parser() {
 	my $day=shift//1;
 	my $Root=Build_Html_Tree( 'daily-weather-forecast',"?day=$day" );
-	my $FC = {}; # ForCast
-	$FC->{Time}=DateParser($Root);
-	$FC->{Range}=ToSec('24h');
-	$FC->{LastUpdate}=time;
+	my $tfc = {}; # ForCast
+	$tfc->{Time}=DateParser($Root);
+	$tfc->{Range}=ToSec('24h');
+	$tfc->{LastUpdate}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
-		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
+		$tfc={%{$tfc},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
 			#TODO Desc
 			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
-			$FC= { %{$FC}, %{Stats_Parser($Stats)} };
-		say Dumper $FC;
+			$tfc= { %{$tfc}, %{Stats_Parser($Stats)} };
 	}
+	return $tfc;
 }
 sub Current_Parser() {
 	my $Root=Build_Html_Tree('current-weather');
-	my $FC = {}; # ForCast
-	$FC->{Time}=0;
-	$FC->{Range}=0;
-	$FC->{LastUpdate}=time;
+	my $tfc = {}; # ForCast
+	$tfc->{Time}=0;
+	$tfc->{Range}=0;
+	$tfc->{LastUpdate}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-now"]/div') ) {
-		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
+		$tfc={%{$tfc},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="more-info"]')->[0];
 			#TODO Desc
 			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
-			$FC= { %{$FC}, %{Stats_Parser($Stats)} };
-		say Dumper $FC;
+			$tfc= { %{$tfc}, %{Stats_Parser($Stats)} };
 	}
 }
 # Parses Day/Night Subsection
@@ -258,7 +274,6 @@ sub Hourly_Parser() {
 			OverwriteTable($hfc,NamedParser({name=>$name,val=>$val,nval=>$nval}));
 		}
 	}
-	say Dumper $FC;
 	return $FC;
 }
 sub Minut_Parser() {
@@ -296,7 +311,6 @@ sub Minut_Parser() {
 		$FC->{$mfc->{Time}} = $mfc;
 		$date+=ToSec('1m');
 	}
-	say Dumper $FC;
 }
 sub ForecastInfo_Parser() {
 	my $DayCast=shift;
@@ -551,8 +565,12 @@ sub __Read_Args {
 				shift @ARGV;
 				$STORE_FILE='/dev/null';
 			}
-			when (/test-day/i) {
+			when ('test-day') {
 				Daily_Parser();
+				shift @ARGV;
+			}
+			when ('test-days') {
+				GetDays();
 				shift @ARGV;
 			}
 			when (/test-now/i) {
