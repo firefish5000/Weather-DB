@@ -31,6 +31,12 @@ my $Location = "/en/us/lakeland-tn/38002/";
 my $LocationID = "2201989";
 
 my $CONFIG = { };
+$CONFIG->{Lifetime}{Current}=ToSec('1m');
+$CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
+$CONFIG->{Lifetime}{Minute}=ToSec('1m');
+$CONFIG->{Lifetime}{Hourly}=ToSec('10m');
+$CONFIG->{Lifetime}{Daily}=ToSec('1hr');
+$CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
 $CONFIG->{Get}{Hourly}=1;
@@ -63,6 +69,30 @@ my $STORE={};
 ######
 # MAIN
 ######
+my $IFC_Examp = {
+	Time=>0, # The time the forecast refers to
+	Range=>'24h', # How long the forecast refers to.(current=0s,minutcast=60s,hourly=60min,daily=24hr)
+	LastUpdated=>0,
+	Units=>'Metric', # Metric or Imperial
+	Weather=>{
+		Temp=>0,
+		Humidity=>0,
+		Description=>"Clear",
+		Percipitation=>{Chance=>0,Amnt=>0,TotalDurration=>0},
+		Rain=>{Chance=>0,Amnt=>0,TotalDurration=>0},
+		Snow=>{Chance=>0,Amnt=>0,TotalDurration=>0},
+		Sleat=>{Chance=>0,Amnt=>0,TotalDurration=>0},
+		Hail=>{Chance=>0,Amnt=>0,TotalDurration=>0},
+		Thunderstorm=>{Chance=>0,TotalDurration=>undef},
+		Tornado=>{Chance=>0,TotalDurration=>undef},
+		Wind=>{Speed=>0,Dir=>'N'},
+		UV_Index=>{Max=>0,Min=>0,Cur=>0}
+	},
+	Feel=>{
+		Temp=>0,
+	},
+
+};
 $STORE=retrieve($STORE_FILE) if ( -e $STORE_FILE);
 #StoreUpdate();
 #die 'PAUSED';
@@ -70,16 +100,7 @@ my $INST={};
 
 __Read_Args();
 # NOTE Helper Vars. Should be replaced once structure is stable
-my @UL_Statuses = qw{Current Completed Planned Stalled Dropped};
-foreach my $User (@{$CONFIG->{Traking}{UserList}}) {
-	my $Type='Anime';
-	GetUserLists($User);
-	#GetUserList(User=>$User,Type=>'Anime');
-	foreach my $Page (keys %{$STORE->{UserList}{$User}{$Type}{Completed}}) {
-		StoreAnime($Page);
-		GenRelationsTree($Page);
-	}
-}
+
 store($STORE, $STORE_FILE);
 #EnhancedRecs(keys $STORE->{UserList}{$User}{$Type}{Completed});
 ##################
@@ -87,10 +108,12 @@ store($STORE, $STORE_FILE);
 ##################
 sub Build_Html_Tree {
 	my $path = shift;
+	my $query = shift//'';
 	#$mech->get( $Site . $path);
 	#$webkit->open( $Site . $path);
 	#$webkit->wait_for_page_to_load(15000);
-	my $content = get( $Site . $path) or die("Unable to fetch page '" . $Site . $path . "'!"); # lwp
+	my $page = join('/',$Site,$Location,$path,$LocationID ) . $query;
+	my $content = get( $page ) or die("Unable to fetch page <" . $page . ">!"); # lwp
 	#$lwp->wait_for_page_to_load(15000);
 	#my $AnimeTree = HTML::TreeBuilder::XPath->new_from_content($mech->content);
 	#my $content =  $webkit->view->get_dom_document->get_document_element->get_outer_html;
@@ -116,31 +139,38 @@ sub StoreInfo {
 	return $STORE->{Page}{$Page}{Info};
 }
 sub IsOld {
-	my $LastUpdate=shift;
-	return 1 if	((($LastUpdate//0) + $CONFIG->{Options}{LifeTime} + int(rand($CONFIG->{Options}{LifeDevi})) ) <= time );
+	my $LastUpdate=shift//0;
+	my $LifeTime=shift//0;
+	return 1 if	($LastUpdate + $LifeTime <= time );
 	return 0;
 }
 
 #########
 # Weather
 #########
-sub Extended_Parser() { # Parses Extended Forcast
-	my $Root=Build_Html_Tree( '/en/us/lakeland-tn/38002/daily-weather-forecast/2201989');
+sub Parser() { # Parses Extended Forcast
+	my $Root=Build_Html_Tree( 'daily-weather-forecast');
 	#my $Root=Build_Html_Tree( $Location);
 	my $ShortCast = $Root->findnodes('//div[@id="feed-tabs"]');
 #	foreach my $day ();
 	#say Dumper $Root;
 	say Dumper $ShortCast;
-
-	...
 }
 
 ### TAB PARSERS
 
 # Parse the daily tab
-sub Extended_Daily_Parser() {
-	my $Root=Build_Html_Tree( $Location . '/daily-weather-forecast/' . $LocationID );
+sub Get_Daily() {
+	for my $i (1..45) {
+		Daily_Parser($i)
+	}
+}
+sub Daily_Parser() {
+	my $day=shift//1;
+	my $Root=Build_Html_Tree( 'daily-weather-forecast',"?day=$day" );
 	my $FC = {}; # ForCast
+	$FC->{Date}=DateParser($Root);
+	$FC->{LastUpdate}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
 		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
@@ -150,8 +180,8 @@ sub Extended_Daily_Parser() {
 		say Dumper $FC;
 	}
 }
-sub Extended_Now_Parser() {
-	my $Root=Build_Html_Tree( $Location . '/current-weather/' . $LocationID );
+sub Now_Parser() {
+	my $Root=Build_Html_Tree('current-weather');
 	my $FC = {}; # ForCast
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-now"]/div') ) {
 		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
@@ -163,8 +193,16 @@ sub Extended_Now_Parser() {
 	}
 }
 # Parses Day/Night Subsection
+# Page up to ?hour=curhour+85.
+sub OverwriteTable {
+	my $orig=shift||{};
+	my $new=shift||{};
+	foreach my $key (keys $new) {
+		$orig->{$key}=$new->{$key};
+	}
+}
 sub Hourly_Parser() {
-	my $Root=Build_Html_Tree( $Location . '/hourly-weather-forecast/' . $LocationID );
+	my $Root=Build_Html_Tree('hourly-weather-forecast' );
 	my $Hourly = $Root->findnodes('//div[@id="detail-hourly"]/div/table[@class="data"]')->[0];
 	my $i=0;
 	my $FC={};
@@ -186,34 +224,28 @@ sub Hourly_Parser() {
 			my $hfc=$FCs[$i++];
 			my $val =  $col->findvalue('.');
 			my ($nval) =  $val =~ m{(\d+(?:[%\x{b0}]|am|pm|hours|min|sec|hr)?)};
-			given ($name) {
-				when ('Forecast') { $hfc->{Condition}=$val; }
-				when (/^Wind/) { $hfc->{WindSpeed}=$val; }
-				when (/^Temp/) { $hfc->{Temp}=$val; }
-				when (/^RealFeel/) { $hfc->{RealFeel}{Temp}=$val; }
-				when ('Max UV Index') { $hfc->{MaxUV}=$val; }
-				when ('Thunderstorms') { $hfc->{Thunder}{Likelyhood}=$val; }
-				when ('Precipitation') { $hfc->{Percipitation}{Inches}=$val; }
-				when ('Rain') { $hfc->{Rain}{Inches}=$nval; }
-				when ('Snow') { $hfc->{Snow}{Inches}=$nval; }
-				when ('Ice') { $hfc->{Ice}{Inches}=$nval; }
-				when ('Hours of Precipitation') { $hfc->{Percipitation}{Hours}=$val; }
-				when ('Hours of Rain') { $hfc->{Rain}{Hours}=$val; }
-				when ('Humidity') { $hfc->{Humidity}=$val; }
-				when ('Pressure') { $hfc->{Pressure}=$val; }
-				when ('UV Index') { $hfc->{UV_Index}{Current}=$val; }
-				when ('Cloud Cover') { $hfc->{CloudCoverage}=$val; }
-				when ('Ceiling') { $hfc->{Ceiling}=$val; } # Where clouds start?
-				when ('Dew Point') { $hfc->{Dew}{Point}=$val; }
-				when ('Visibility') { $hfc->{Visibility}=$val; }
-				#when ('') { $hfc->{}=$val; }
-				default {
-					Warn qq{Unhandled Name<$name> Value<$val>.};
-				}
-			}
+			OverwriteTable($hfc,NamedParser({name=>$name,val=>$val,nval=>$nval}));
 		}
 	}
 	say Dumper @FCs;
+}
+sub Minut_Parser() {
+	my $Root=Build_Html_Tree('minute-weather-forecast' );
+	my @minutes;
+	foreach my $num (0,30,60,90) {
+		foreach my $col ($Root->findnodes('//div[@id="mc-' . $num . '"]/div[@class="minute-column"]')) {
+			#push(@minutes,$col->findnodes('./ul[@class="minute-list"]/li')); # FIXME contains class
+			push(@minutes,$col->findnodes('./ul/li'));
+		}
+	}
+	my $FC={};
+	foreach my $Min (@minutes) {
+		my $mfc = {};
+		$mfc->{Time} = $Min->findvalue('./span[@class="time"]');
+		$mfc->{Type} = $Min->findvalue('./span[@class="type"]');
+		$FC->{$mfc->{Time}} = $mfc;
+	}
+	say Dumper $FC;
 }
 sub ForecastInfo_Parser() {
 	my $DayCast=shift;
@@ -226,35 +258,59 @@ sub ForecastInfo_Parser() {
 	($FC->{RealFeel}{Percipitation}) = $1 if $RealFeel =~ m{Precipitation.?\s+(\d+)%};
 	return $FC;
 }
+sub Advisories_Parser() { # TODO
+	my $Root=Build_Html_Tree( $Location . '/weather-warnings/' . $LocationID );
+}
 sub Stats_Parser() {
 	my $Stats=shift;
 	my $FC={};
 	foreach my $stat ($Stats->findnodes('./li')) {
 		my $val=$stat->findvalue('./strong');
 		my ($name) = $stat->findvalue('./text()') =~ m{^([^:]+):};
-		given ($name) {
-			when ('Max UV Index') { $FC->{MaxUV}=$val; }
-			when ('Thunderstorms') { $FC->{Thunder}{Likelyhood}=$val; }
-			when ('Precipitation') { $FC->{Percipitation}{Inches}=$val; }
-			when ('Rain') { $FC->{Rain}{Inches}=$val; }
-			when ('Snow') { $FC->{Snow}{Inches}=$val; }
-			when ('Ice') { $FC->{Ice}{Inches}=$val; }
-			when ('Hours of Precipitation') { $FC->{Percipitation}{Hours}=$val; }
-			when ('Hours of Rain') { $FC->{Rain}{Hours}=$val; }
-			when ('Humidity') { $FC->{Humidity}=$val; }
-			when ('Pressure') { $FC->{Pressure}=$val; }
-			when ('UV Index') { $FC->{UV_Index}{Current}=$val; }
-			when ('Cloud Cover') { $FC->{CloudCoverage}=$val; }
-			when ('Ceiling') { $FC->{Ceiling}=$val; } # Where clouds start?
-			when ('Dew Point') { $FC->{Dew}{Point}=$val; }
-			when ('Visibility') { $FC->{Visibility}=$val; }
-			#when ('') { $FC->{}=$val; }
-			default {
-				Warn qq{Unhandled Name<$name> Value<$val>.};
-			}
-		}
+		OverwriteTable($FC,NamedParser({name=>$name,val=>$val,nval=>$val}));
 	}
 	return $FC;
+}
+sub DateParser() {
+	# Parsing the date from the site seems easier than determining weather day1 == pc's current day, tomarrow, or yesterday.
+	# Especialy when the current time is between 23:59 and 00:01.
+	my $Root=shift;
+	my $date = $Root->findvalue('//div[@id="feed-tabs"]/ul/li[contains(@class,"current")]/div/h4');
+	return $date;
+}
+sub NamedParser() {
+	my $args=shift;
+	my $name=$args->{name};
+	my $val=$args->{val}||$args->{nval}||undef;
+	my $nval=$args->{nval}||$val;
+	my $lFC={};
+	given ($name) {
+		when ('Forecast') { $lFC->{Weather}{Description}=$val; }
+		when (/^Wind/) { $lFC->{Weather}{Wind}{Speed}=$val; }
+		when (/^Temp/) { $lFC->{Weather}{Temp}=$val; }
+		when (/^RealFeel/) { $lFC->{Feel}{Temp}=$val; }
+		when ('Max UV Index') { $lFC->{Weather}{UV_Index}{Max}=$val; }
+		when ('Thunderstorms') { $lFC->{Weather}{Thunder}{Chance}=$val; }
+		when ('Precipitation') { $lFC->{Weather}{Percipitation}{Amnt}=$val; }
+		when ('Rain') { $lFC->{Weather}{Rain}{Amnt}=$nval; }
+		when ('Snow') { $lFC->{Weather}{Snow}{Amnt}=$nval; }
+		when ('Ice') { $lFC->{Weather}{Ice}{Amnt}=$nval; }
+		when ('Hours of Precipitation') { $lFC->{Weather}{Percipitation}{TotalDurration}=$val; }
+		when ('Hours of Rain') { $lFC->{Weather}{Rain}{TotalDurration}=$val; }
+		when ('Humidity') { $lFC->{Weather}{Humidity}=$val; }
+		when ('Pressure') { $lFC->{Weather}{Pressure}=$val; }
+		when ('UV Index') { $lFC->{Weather}{UV_Index}{Current}=$val; }
+		when ('Cloud Cover') { $lFC->{Weather}{CloudCoverage}=$val; }
+		when ('Ceiling') { $lFC->{Weather}{Ceiling}=$val; } # Where clouds start?
+		when ('Dew Point') { $lFC->{Weather}{Dew}{Point}=$val; }
+		when ('Visibility') { $lFC->{Weather}{Visibility}=$val; }
+		when (/^Middle Grid line/) { return $lFC; }
+		#when ('') { $lFC->{}=$val; }
+		default {
+			Warn qq{Unhandled Name<$name> Value<$val>.};
+		}
+	}
+	return $lFC;
 }
 
 
@@ -400,6 +456,30 @@ sub IsDigit {
 	return 1 if ($Digit =~ m{^((\d+(\.\d*)?)|(\d*\.\d+))$});
 	return 0;
 }
+sub ToSec {
+    my $time = shift;
+    my $Seconds = 0;
+	return 0 unless defined($time);
+	return $time if $time =~ m{^( '-'? \d+ | inf )$}x;
+	#Croak q{Time Uninitialized} unless defined($time);
+	#while ($time =~ m{ (\d+) \s* ([^0-9 \t]+)?  }gx) {
+	while ($time =~ m{ (\d+(?:\.\d*)?|`\d*\.\d+) \s* ([^0-9 \t]+)?  }gx) {
+        my $sec = $1;
+        my $format=$2 || '';
+        if ($format =~ m{^ d(ays?)? $}ix) {
+            $Seconds+=$sec*60*60*24;
+		} elsif ($format =~ m{^ h((ou)?rs?)? $}ix) {
+            $Seconds+=$sec*60*60;
+        } elsif ($format =~ m{^ m(in(ut)?s?)? $}ix) {
+            $Seconds+=$sec*60;
+        } elsif ($format =~ m{^ (s(ec(ond)?s?)?)? $}ix) {
+            $Seconds+=$sec;
+        } else {
+            Croak q{Unknown Time Format }, $format, q{ In }, $time;
+        }
+    }
+    return $Seconds;
+}
 
 sub __Read_Args {
 	PARSE_ARGUMENTS:
@@ -418,16 +498,21 @@ sub __Read_Args {
 				$STORE_FILE='/dev/null';
 			}
 			when (/test-day/i) {
-				Extended_Daily_Parser();
+				Daily_Parser();
 				shift @ARGV;
 			}
 			when (/test-now/i) {
-				Extended_Now_Parser();
+				Now_Parser();
 				shift @ARGV;
 			}
 			when (/test-hour/i) {
-				#Extended_Hourly_Parser();
+				#Hourly_Parser();
 				Hourly_Parser();
+				shift @ARGV;
+			}
+			when (/test-min/i) {
+				#Hourly_Parser();
+				Minut_Parser();
 				shift @ARGV;
 			}
 			default {
