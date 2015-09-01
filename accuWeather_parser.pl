@@ -142,12 +142,7 @@ sub Extended_Daily_Parser() {
 	my $Root=Build_Html_Tree( $Location . '/daily-weather-forecast/' . $LocationID );
 	my $FC = {}; # ForCast
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
-		my $Info = $DayCast->findnodes('.//div[@class="info"]')->[0];
-			$FC->{Temp}		= $Info->findvalue('./span[@class="temp"]');
-			my $RealFeel = $Info->findnodes_as_string('./span[@class="realfeel"]');
-			($FC->{RealFeel}{Temp}) = $RealFeel =~ m{RealFeel.?\s+(\d+)\x{b0}};
-			($FC->{RealFeel}{Percipitation}) = $RealFeel =~ m{Precipitation.?\s+(\d+)%};
-			say Dumper $RealFeel;
+		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
 			#TODO Desc
 			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
@@ -156,16 +151,11 @@ sub Extended_Daily_Parser() {
 	}
 }
 sub Extended_Now_Parser() {
-	my $Root=Build_Html_Tree( $Location . '/daily-weather-forecast/' . $LocationID );
+	my $Root=Build_Html_Tree( $Location . '/current-weather/' . $LocationID );
 	my $FC = {}; # ForCast
-	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
-		my $Info = $DayCast->findnodes('.//div[@class="info"]')->[0];
-			$FC->{Temp}		= $Info->findvalue('./span[@class="temp"]');
-			my $RealFeel = $Info->findnodes_as_string('./span[@class="realfeel"]');
-			($FC->{RealFeel}{Temp}) = $RealFeel =~ m{RealFeel.?\s+(\d+)\x{b0}};
-			($FC->{RealFeel}{Percipitation}) = $RealFeel =~ m{Precipitation.?\s+(\d+)%};
-			say Dumper $RealFeel;
-		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
+	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-now"]/div') ) {
+		$FC={%{$FC},%{ForecastInfo_Parser($DayCast)}};
+		my $Cont = $DayCast->findnodes('.//div[@class="more-info"]')->[0];
 			#TODO Desc
 			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
 			$FC= { %{$FC}, %{Stats_Parser($Stats)} };
@@ -173,6 +163,69 @@ sub Extended_Now_Parser() {
 	}
 }
 # Parses Day/Night Subsection
+sub Hourly_Parser() {
+	my $Root=Build_Html_Tree( $Location . '/hourly-weather-forecast/' . $LocationID );
+	my $Hourly = $Root->findnodes('//div[@id="detail-hourly"]/div/table[@class="data"]')->[0];
+	my $i=0;
+	my $FC={};
+	my @FCs;
+	foreach my $header ($Hourly->findnodes('./thead/tr/th')) {
+		next if ($i++ == 0 && scalar $header->findnodes('./@class="first"') == 1 );
+		my ($time) = $header->findnodes_as_string('.') =~ m{(\d\d?(?:am|pm))} or die "Could Not Find Time in Detail-Hourly header<" . $header->findnodes_as_string('.') .">";
+		say $time;
+		my $hfc = {};
+		$hfc->{Time}=$time;
+		push(@FCs,$hfc);
+	}
+	foreach my $row ($Hourly->findnodes('./tr')) {
+		my $class = $row->findvalue('./@class');
+		my $name = $row->findvalue('./th');
+		say "Class<$class> Name<$name>";
+		$i=0;
+		foreach my $col ($row->findnodes('./td')) {
+			my $hfc=$FCs[$i++];
+			my $val =  $col->findvalue('.');
+			my ($nval) =  $val =~ m{(\d+(?:[%\x{b0}]|am|pm|hours|min|sec|hr)?)};
+			given ($name) {
+				when ('Forecast') { $hfc->{Condition}=$val; }
+				when (/^Wind/) { $hfc->{WindSpeed}=$val; }
+				when (/^Temp/) { $hfc->{Temp}=$val; }
+				when (/^RealFeel/) { $hfc->{RealFeel}{Temp}=$val; }
+				when ('Max UV Index') { $hfc->{MaxUV}=$val; }
+				when ('Thunderstorms') { $hfc->{Thunder}{Likelyhood}=$val; }
+				when ('Precipitation') { $hfc->{Percipitation}{Inches}=$val; }
+				when ('Rain') { $hfc->{Rain}{Inches}=$nval; }
+				when ('Snow') { $hfc->{Snow}{Inches}=$nval; }
+				when ('Ice') { $hfc->{Ice}{Inches}=$nval; }
+				when ('Hours of Precipitation') { $hfc->{Percipitation}{Hours}=$val; }
+				when ('Hours of Rain') { $hfc->{Rain}{Hours}=$val; }
+				when ('Humidity') { $hfc->{Humidity}=$val; }
+				when ('Pressure') { $hfc->{Pressure}=$val; }
+				when ('UV Index') { $hfc->{UV_Index}{Current}=$val; }
+				when ('Cloud Cover') { $hfc->{CloudCoverage}=$val; }
+				when ('Ceiling') { $hfc->{Ceiling}=$val; } # Where clouds start?
+				when ('Dew Point') { $hfc->{Dew}{Point}=$val; }
+				when ('Visibility') { $hfc->{Visibility}=$val; }
+				#when ('') { $hfc->{}=$val; }
+				default {
+					Warn qq{Unhandled Name<$name> Value<$val>.};
+				}
+			}
+		}
+	}
+	say Dumper @FCs;
+}
+sub ForecastInfo_Parser() {
+	my $DayCast=shift;
+	my $FC={};
+	my $Info = $DayCast->findnodes('.//div[@class="info"]')->[0];
+	$FC->{Temp}		= $Info->findvalue('./span[@class="temp"]');
+	$FC->{Condition}		= $Info->findvalue('./span[@class="cond"]');
+	my $RealFeel	= $Info->findnodes_as_string('./span[@class="realfeel"]');
+	($FC->{RealFeel}{Temp}) = $1 if $RealFeel =~ m{RealFeel.?\s+(\d+)};
+	($FC->{RealFeel}{Percipitation}) = $1 if $RealFeel =~ m{Precipitation.?\s+(\d+)%};
+	return $FC;
+}
 sub Stats_Parser() {
 	my $Stats=shift;
 	my $FC={};
@@ -188,7 +241,7 @@ sub Stats_Parser() {
 			when ('Ice') { $FC->{Ice}{Inches}=$val; }
 			when ('Hours of Precipitation') { $FC->{Percipitation}{Hours}=$val; }
 			when ('Hours of Rain') { $FC->{Rain}{Hours}=$val; }
-			when ('Humidity') { $FC->{Rain}{Hours}=$val; }
+			when ('Humidity') { $FC->{Humidity}=$val; }
 			when ('Pressure') { $FC->{Pressure}=$val; }
 			when ('UV Index') { $FC->{UV_Index}{Current}=$val; }
 			when ('Cloud Cover') { $FC->{CloudCoverage}=$val; }
@@ -364,10 +417,18 @@ sub __Read_Args {
 				shift @ARGV;
 				$STORE_FILE='/dev/null';
 			}
-			when (/test/i) {
+			when (/test-day/i) {
 				Extended_Daily_Parser();
 				shift @ARGV;
-				#Extended_Parser();
+			}
+			when (/test-now/i) {
+				Extended_Now_Parser();
+				shift @ARGV;
+			}
+			when (/test-hour/i) {
+				#Extended_Hourly_Parser();
+				Hourly_Parser();
+				shift @ARGV;
 			}
 			default {
 				say "Unknown Option '$ARGV[0]'";
