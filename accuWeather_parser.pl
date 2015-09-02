@@ -36,6 +36,7 @@ $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
 $CONFIG->{Lifetime}{Minutes}=ToSec('1m');
 $CONFIG->{Lifetime}{Hours}=ToSec('10m');
 $CONFIG->{Lifetime}{Days}=ToSec('1hr');
+#$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
@@ -103,7 +104,7 @@ my $FC_Example={
 	Days=>{DaySec1=>$IFC,DaySec2=>$IFC},
 };
 }
-$STORE=retrieve($STORE_FILE) if ( -e $STORE_FILE);
+$FC=retrieve($STORE_FILE) if ( -e $STORE_FILE);
 #StoreUpdate();
 #die 'PAUSED';
 my $INST={};
@@ -111,7 +112,7 @@ my $INST={};
 __Read_Args();
 # NOTE Helper Vars. Should be replaced once structure is stable
 
-store($STORE, $STORE_FILE);
+store($FC, $STORE_FILE);
 #EnhancedRecs(keys $STORE->{UserList}{$User}{$Type}{Completed});
 ##################
 # HELPER FUNCTIONS
@@ -130,41 +131,35 @@ sub Build_Html_Tree {
 #########
 my $STORE_CNT=0;
 
-sub StoreSection {
-	my $Key	= shift;
-	my $Tree	= shift || undef;
-	my $WeFetch = (defined $Tree) ? 0 : 1;
-	if ( IsOld($STORE->{Page}{$Page}{Info}{LastUpdate}) ) {
-		$Tree //= Build_Html_Tree($Page);
-		$STORE->{Page}{$Page}{Info} = PageInfo($Tree);
-		$STORE->{Page}{$Page}{Info}{LastUpdate} = time;
-		if ($STORE_CNT++ >= 14) { store($STORE, $STORE_FILE); $STORE_CNT= 0; }
-		StorePageDetails($Page,$Tree) if ($WeFetch);
-	}
-	return $STORE->{Page}{$Page}{Info};
-}
 sub IsOld {
 	my $LastUpdate=shift//0;
 	my $LifeTime=shift//0;
-	return 1 if	($LastUpdate + $LifeTime <= time );
+	#return 1 if	($LastUpdate + $LifeTime <= time );
+	if	($LastUpdate + $LifeTime <= time ) {
+		Info "It's Old $LastUpdate + $LifeTime <= " . time;
+		return 1;
+	}
+	Info "It's Good $LastUpdate + $LifeTime > " . time;
 	return 0;
 }
 
 #########
 # Weather
 #########
-sub Parser() { # Parses Extended Forcast
+sub GetForecast { # Parses Extended Forcast
 	my $Root=Build_Html_Tree( 'daily-weather-forecast');
 	#my $Root=Build_Html_Tree( $Location);
-	my $ShortCast = $Root->findnodes('//div[@id="feed-tabs"]');
-	my $FC = {
+	Msg "Will Get:\nCurrent Minutes Hours Days";
+	# FIXME Need to check parse didn't fail on each, and return error and keep old values if it did.
+	my $tfc = {
 		Current=>GetCurrent(),
 		Minutes=>GetMinutes(),
 		Hours=>GetHours(),
 		Days=>GetDays(),
 	};
-#	foreach my $day ();
+	$FC=$tfc;
 	Info Dumper $FC;
+	return $FC
 }
 
 ### TAB PARSERS
@@ -173,6 +168,8 @@ sub Parser() { # Parses Extended Forcast
 sub GetDays() {
 	my $tfc = $FC->{Days}//{};
 	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Days});
+	$tfc->{Range}=ToSec('24h');
+	$tfc->{LastUpdated}=time;
 	for my $i (1..45) {
 		my $day = Daily_Parser($i);
 		$tfc->{$day->{Time}}=$day;
@@ -180,7 +177,7 @@ sub GetDays() {
 	return $tfc
 }
 sub GetHours() {
-	my $tfc = $FC->{Days}//{};
+	my $tfc = $FC->{Hours}//{};
 	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Hours});
 	$tfc = Hourly_Parser();
 	return $tfc;
@@ -192,7 +189,7 @@ sub GetMinutes() {
 	return $tfc;
 }
 sub GetCurrent() {
-	my $tfc = $FC->{Minutes}//{};
+	my $tfc = $FC->{Current}//{};
 	return $tfc unless IsOld($tfc->{LastUpdated},$CONFIG->{Lifetime}{Current});
 	$tfc = Current_Parser();
 	return $tfc;
@@ -203,7 +200,7 @@ sub Daily_Parser() {
 	my $tfc = {}; # ForCast
 	$tfc->{Time}=DateParser($Root);
 	$tfc->{Range}=ToSec('24h');
-	$tfc->{LastUpdate}=time;
+	$tfc->{LastUpdated}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
 		$tfc={%{$tfc},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
@@ -218,7 +215,7 @@ sub Current_Parser() {
 	my $tfc = {}; # ForCast
 	$tfc->{Time}=0;
 	$tfc->{Range}=0;
-	$tfc->{LastUpdate}=time;
+	$tfc->{LastUpdated}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-now"]/div') ) {
 		$tfc={%{$tfc},%{ForecastInfo_Parser($DayCast)}};
 		my $Cont = $DayCast->findnodes('.//div[@class="more-info"]')->[0];
@@ -226,6 +223,7 @@ sub Current_Parser() {
 			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
 			$tfc= { %{$tfc}, %{Stats_Parser($Stats)} };
 	}
+	return $tfc;
 }
 # Parses Day/Night Subsection
 # Page up to ?hour=curhour+85.
@@ -240,10 +238,10 @@ sub Hourly_Parser() {
 	my $Root=Build_Html_Tree('hourly-weather-forecast' );
 	my $Hourly = $Root->findnodes('//div[@id="detail-hourly"]/div/table[@class="data"]')->[0];
 	my $i=0;
-	my $FC={};
+	my $tfc={};
 	my @FCs;
-	$FC->{Range}=ToSec('1h');
-	$FC->{LastUpdate}=time;
+	$tfc->{Range}=ToSec('1h');
+	$tfc->{LastUpdated}=time;
 	my $first=1;
 	my $time;
 	foreach my $header ($Hourly->findnodes('./thead/tr/th')) {
@@ -257,8 +255,8 @@ sub Hourly_Parser() {
 		my $hfc = {};
 		$hfc->{Time}=$time;
 		$hfc->{Range}=ToSec('1h');
-		$hfc->{LastUpdate}=time;
-		$FC->{$time}=$hfc;
+		$hfc->{LastUpdated}=time;
+		$tfc->{$time}=$hfc;
 		push(@FCs,$hfc);
 		$time+=ToSec('1h');
 	}
@@ -274,7 +272,7 @@ sub Hourly_Parser() {
 			OverwriteTable($hfc,NamedParser({name=>$name,val=>$val,nval=>$nval}));
 		}
 	}
-	return $FC;
+	return $tfc;
 }
 sub Minut_Parser() {
 	my $Root=Build_Html_Tree('minute-weather-forecast' );
@@ -285,7 +283,9 @@ sub Minut_Parser() {
 			push(@minutes,$col->findnodes('./ul/li'));
 		}
 	}
-	my $FC={};
+	my $tfc={};
+	$tfc->{Range} = ToSec('1m');
+	$tfc->{LastUpdated} = time;
 	my $first=1;
 	my $date;
 	foreach my $Min (@minutes) {
@@ -307,34 +307,35 @@ sub Minut_Parser() {
 		#Info 'Date ', $date, ' Accu ', $chkdate;
 		$mfc->{Weather}{Description} = $Min->findvalue('./span[@class="type"]');
 		$mfc->{Range} = ToSec('1m');
-		$mfc->{LastUpdate} = time;
-		$FC->{$mfc->{Time}} = $mfc;
+		$mfc->{LastUpdated} = time;
+		$tfc->{$mfc->{Time}} = $mfc;
 		$date+=ToSec('1m');
 	}
+	return $tfc;
 }
 sub ForecastInfo_Parser() {
 	my $DayCast=shift;
-	my $FC={};
+	my $tfc={};
 	my $Info = $DayCast->findnodes('.//div[@class="info"]')->[0];
-	$FC->{Temp}		= $Info->findvalue('./span[@class="temp"]');
-	$FC->{Condition}		= $Info->findvalue('./span[@class="cond"]');
+	$tfc->{Temp}		= $Info->findvalue('./span[@class="temp"]');
+	$tfc->{Condition}		= $Info->findvalue('./span[@class="cond"]');
 	my $RealFeel	= $Info->findnodes_as_string('./span[@class="realfeel"]');
-	($FC->{RealFeel}{Temp}) = $1 if $RealFeel =~ m{RealFeel.?\s+(\d+)};
-	($FC->{RealFeel}{Percipitation}) = $1 if $RealFeel =~ m{Precipitation.?\s+(\d+)%};
-	return $FC;
+	($tfc->{RealFeel}{Temp}) = $1 if $RealFeel =~ m{RealFeel.?\s+(\d+)};
+	($tfc->{RealFeel}{Percipitation}) = $1 if $RealFeel =~ m{Precipitation.?\s+(\d+)%};
+	return $tfc;
 }
 sub Advisories_Parser() { # TODO
 	my $Root=Build_Html_Tree( $Location . '/weather-warnings/' . $LocationID );
 }
 sub Stats_Parser() {
 	my $Stats=shift;
-	my $FC={};
+	my $tfc={};
 	foreach my $stat ($Stats->findnodes('./li')) {
 		my $val=$stat->findvalue('./strong');
 		my ($name) = $stat->findvalue('./text()') =~ m{^([^:]+):};
-		OverwriteTable($FC,NamedParser({name=>$name,val=>$val,nval=>$val}));
+		OverwriteTable($tfc,NamedParser({name=>$name,val=>$val,nval=>$val}));
 	}
-	return $FC;
+	return $tfc;
 }
 sub DateParser() {
 	# Parsing the date from the site seems easier than determining weather day1 == pc's current day, tomarrow, or yesterday.
@@ -380,141 +381,147 @@ sub NamedParser() {
 	}
 	return $lFC;
 }
-
-
-##################
-# MAL USER LIST PARSER {{{
-##################
-
-sub GetUserList {
-	my $args = { @_ };
-	my $User = $args->{User};
-	my $Type = $args->{Type};
-	my $typepath='';
-	if ($Type eq 'Anime') {
-		$typepath = '/animelist/';
-	} elsif ($Type eq 'Manga') {
-		$typepath = '/mangalist/';
-	} else {
-		croak "WhateverWeAre was given an unknown Type '$Type'.";
-	}
-	return $STORE->{UserList}{$User}{$Type} if (($CONFIG->{Options}{UpdateUserList}//1) == 0);
-	my $UserTree = Build_Html_Tree( $typepath . $User);
-	my $CTable='';
-	my $Layout={};
-	my $XPath_UserList_Pre = '/html/body/div[@id="list_surround"]';
-	foreach my $Table ($UserTree->findnodes('/html/body/div[@id="list_surround"]/table')) {
-		$CTable = 'Current'		if ($Table->matches($XPath_UserList_Pre . '/table[@class="header_cw"]'));
-		$CTable = 'Completed'	if ($Table->matches($XPath_UserList_Pre . '/table[@class="header_completed"]'));
-		$CTable = 'Planned'		if ($Table->matches($XPath_UserList_Pre . '/table[@class="header_ptw"]'));
-		next unless ($CTable =~ m/Current|Completed|Planned/);
-		if ($Table->exists('./tbody/tr/td[@class="table_header"]')) {
-			$Layout = ParseLayout($Table);
-			next;
-		} 
-		if ($Table->exists('./tbody/tr/td[@class="catagory_totals"]')) {
-			$CTable='';
-			$Layout={};
-			next;
-		}
-		next unless (scalar(keys $Layout) >= 1 );
-		next unless (exists $Layout->{Link});
-		StoreUserList(	User => $User,
-						Status => $CTable,
-						UserListItem => ReadItem(Item=>$Table,Layout=>$Layout),
-		) if ($Table->exists('./tbody/tr/td[@class="td1" or @class="td2"]'));
-	}
-	return $STORE->{UserList}{$User}{$Type};
-}
-sub ReadItem {
-	my $args={@_};
-	my $Item=$args->{Item};
-	my $Layout=$args->{Layout};
-#	my $Name = $Item->findvalue('./tbody/tr/td[2]/a/span');
-#	my $Link = $Item->findvalue('./tbody/tr/td[2]/a/@href');
-#	my $Score = $Item->findvalue('./tbody/tr/td[3]');
-#	my $Type = $Item->findvalue('./tbody/tr/td[4]');
-#	my $Progress = $Item->findvalue('./tbody/tr/td[5]');
-#	my @Tags = $Item->findnodes_as_strings('./tbody/tr/td[6]/span/a');
-	my $Tree;
-	foreach my $key (keys $Layout) {
-		my $xpath = $Layout->{$key};
-		given ($key) {
-			when ('Name') {
-				$Tree->{$key} = $Item->findvalue($xpath . '/a/span');
-			}
-			when ('Link') {
-				$Tree->{$key} = $Item->findvalue($xpath . '/a/@href');
-			}
-			when ('Score') {
-				$Tree->{$key} = $Item->findvalue($xpath);
-			}
-			when ('Type') {
-				$Tree->{$key} = $Item->findvalue($xpath);
-			}
-			when (m/^Progress|Chapters|Volumes$/) {
-				$Tree->{$key} = $Item->findvalue($xpath);
-			}
-			when ('Tags') {
-				$Tree->{$key} = [$Item->findnodes_as_strings($xpath . '/span/a')];
-			}
-		}
-	}
-	$Tree->{Score}=0 unless ($Tree->{Score} =~ /^\d+(\.\d*)?|\d*(\.\d+)$/); #FIXME
-#	$Tree->{Score}= $Tree->{Score} - 5.5; #FIXME
-	# TODO Expanded details from More hidden/javascript block
-	return($Tree);
-	#return({
-	#	Name		=> $Name,
-	#	Link		=> $Link,
-	#	Score		=> $Score,
-	#	Type		=> $Type,
-	#	Progress	=> $Progress,
-	#	Tags		=> \@Tags,
-	#});
-}
-##############
-# ANIME Parser
-##############
-sub AniDets {
-	my $AniTree = shift;
-#	my @InfoTree = $AniTree->findnodes('/html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]/div[@id="content"]/table/tbody/tr/td[2]/div[2]/table/tbody/tr[1]/');
-	my @UTree = $AniTree->findnodes('/html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]/div[@id="content"]/table/tbody/tr/td[2]/div[2]/table/tbody/tr[2]/td/* | /html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]/div[@id="content"]/table/tbody/tr/td[2]/div[2]/table/tbody/tr[2]/td/text()');
-	#say $AniTree->findnodes_as_strings('/html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]/div[@id="content"]/table/tbody/tr/td[2]/div[2]/table/tbody/tr[2]/td/text()[3]');
-#	say $AniTree->findnodes('/html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]')->[0]->dump;
-	#say $AniTree->findnodes('/html/body/div[@id="myanimelist"]/div[@id="contentWrapper"]/div[@id="content"]/table/tbody/tr/td[2]/div[2]/table/tbody/tr[2]')->[0]->dump;
-	my $Dets={};
-	my $MODE='';
-	my $Item='';
-	foreach my $cont (@UTree) {
-		if (ref($cont) eq 'HTML::Element') {
-			if ($cont->tag eq 'h2') {
-				if ($cont->as_text =~ m/^ *Related Anime *$/) {
-					$MODE='Related';
-				} else {
-					$MODE='';
+#############
+# Helpers {{{
+# Stollen from IdleScript
+sub MakeKeyArray { 
+	#shift; # Discard $PM or self; # FIXME Its hard to determin when $PM->MakeKeyArray will and wont pass self... As such, we are requiring noself 
+	my @Ret;
+	foreach my $arg (@_) {
+		if (ref $arg eq 'ARRAY') {
+			my @A = MakeKeyArray(@$arg);
+			push @Ret, @A if (scalar(@A)>=1); # These are side by side
+		} elsif (ref $arg eq 'HASH') {
+			foreach my $key (keys $arg){
+				my @H = MakeKeyArray($arg->{$key});
+				foreach my $FatVal (@H) {
+					my @val=MakeKeyArray($FatVal); # Flatten the returned array or return given scalar
+					push @Ret, [$key, @val];
 				}
 			}
-		} 
-		next unless ($MODE =~ /Related/);
-		if (ref($cont) eq 'HTML::TreeBuilder::XPath::TextNode') {
-			my $text = $cont->getValue;
-			next if $text =~ /^\h*,\h*$/;
-			croak "Expecting a : terminated string or comma, but got <$text>" unless $text =~ /\:\h*$/;
-			$text =~ s/\:\h*$//;
-			$Item=$text;
-		} elsif (ref($cont) eq 'HTML::Element') {
-			next unless ($Item =~ /./);
-			if ($cont->tag eq 'a') {
-				push(@{$Dets->{Relations}{$Item}}, $cont->attr('href')) if ($cont->attr('href') =~ m{^/anime/+[^/]+}); # ensure it links somewhere. Best to find a way to check for 404/500
-			}
+		} else {
+			push @Ret, $arg;
 		}
 	}
-	return $Dets;
+	return @Ret;
 }
-#
-# MAL }}}
-#
+# Slightly modified Nested hash, originally by ikegami and Axeman 
+# https://stackoverflow.com/questions/11505100/perl-how-to-turn-array-into-nested-hash-keys
+sub NestedHash {
+	my $args = {
+		Assighn=> 'Set', # Set, Appened, Merge
+		CroakOnError => 0,
+		Overwrite => 0,
+		Actions => "Return",
+	};
+	#shift; # Discard $PM or self;
+	# We can do 3 things. We can only use existing keys,
+	# Create the Last key at the end of the chain,
+	# Or create keys recursivly
+	
+	# CHECK ARGS
+	Croak "NestedHash expects a argument Hash" unless ( (scalar @_ %2) == 0 );
+	$args = {%$args, @_};
+	my @accepted_args = qw{Create Keys Hash Value Assighn Actions Overwrite CroakOnError};
+	foreach my $key (qw{Hash Keys}) {
+		Croak "NestedHash requires key '$key' to be passed." unless exists $args->{$key};
+	}
+	foreach my $key (keys $args) {
+		Carp "NestedHash does not take a '$key' key." unless ($key ~~ @accepted_args);
+	}
+	Croak "NestedHash's Assighn must be either 'Set', 'Appened'/'Add', 'Merge', 'IfNonExisting', or 'IfUndef'." unless ($args->{Assighn} ~~ @{[qw{Set Add Appened Merge IfNonExisting IfUndef NonExisting Undef}]});
+	$args->{Assighn} = 'Appened' if ($args->{Assighn} eq 'Add');
+	my $Return={ # Prior to us setting/creating them.
+		Exists=>1,
+		Defined=>1,
+		Error=>0,
+		Value=>undef,
+		Parent=>undef,
+		LastKey=>undef,
+	};
+
+	#HELPERS
+	my $Error=sub { 
+		if ($args->{CroakOnError}) {
+			Croak @_;
+		}
+		$Return->{Error}=\@_;
+	};
+	
+	# KEY DECENDER
+	my $Goal = $args->{Create} // 'Exist'; # Goal defaults to Exists
+	my $ref = \$args->{Hash};
+	my @keys = (ref $args->{Keys} eq 'ARRAY' ) ? @{$args->{Keys}} : @{[$args->{Keys}]};
+	my $key;
+#	Info "Nested Hash recieved Keys @keys TOTAL: ", scalar(@keys);
+	while (scalar(@keys) >= 1) { #FIXME This seems too magical
+		$key = shift @keys;
+		my $lref = $$ref;
+		$Return->{Parent} = $lref;
+		$Return->{LastKey} = $key;
+#		Info "ON $key HAVE @keys TOTAL: ", scalar(@keys);
+		if (exists $lref->{ $key } 
+		 ||($Goal eq "Last" && scalar(@keys) == 0)
+		 ||($Goal eq "Recursive")) {
+			if (scalar(@keys) >= 1) {
+				$ref = \$lref->{ $key }; #FIXME should probably be if exists then this
+				$$ref={} if ($args->{Overwrite} || ! $$ref);
+				if (ref $$ref ne "HASH") {
+					$Return->{Value}=$$ref;
+					$Return->{Exists}=0; $Return->{Defined}=0;
+					$Error->("Existing key $key is not a hash but we still need to decened to @keys.");
+				}
+			} else {
+				$Return->{Exists}=0 unless exists $lref->{$key};
+				$Return->{Defined}=0 unless defined $lref->{$key};
+				$ref = \$lref->{ $key }; 
+				$Return->{Value}=$$ref;
+			}
+		} else {
+			$Return->{Exists}=0; $Return->{Defined}=0;
+			$Error->("Tried to acess nonexisting key $key @keys on $Goal");
+			return $Return;
+		}
+	}
+
+	# VALUE SETTER
+    if (exists $args->{Value}) {
+		given ($args->{Assighn}) {
+		    when ('Set' || 'Replace') {
+			    $$ref = $args->{Value};
+			}
+		    when ('IfNonExisting') {
+			    $$ref = $args->{Value} unless ($Return->{Exists});
+			}
+			when ('IfUndef') {
+			    $$ref = $args->{Value} unless ($Return->{Defined});
+			}
+			when ('Merge') {
+			    $$ref = merge($$ref,$args->{Value});
+			}
+			when ('Appened') {
+				if (ref $args->{Value} eq 'ARRAY') {
+					$$ref = [] unless defined($$ref); # NOTE if the original value is undef, we currently assume empty list. )
+					$$ref = [$$ref] if (ref $$ref ne 'ARRAY') ; # NOTE cosider making this more flexible
+					$$ref = [@{$$ref}, @{$args->{Value}} ];
+				} 
+				elsif (ref $args->{Value} eq 'HASH') {
+					$$ref = {} unless defined($$ref);
+					if (ref $$ref ne 'HASH') { # FIXME through an error?
+						Confess "Trying to appened a hash to a non hash";
+						$$ref = {};
+					}
+					$$ref = { %{$$ref}, %{$args->{Value}} };
+				}
+			}
+		} # END given
+	}
+	$Return->{Value}=$$ref;
+	$Return->{Ref}=$ref; # Because if value is undef or not a ref, altering it becomes dificault...
+    return $Return; # Returns the last key by default
+}
+# Helpers }}}
+#############
 
 #######################
 # Generic Functions {{{
@@ -565,27 +572,30 @@ sub __Read_Args {
 				shift @ARGV;
 				$STORE_FILE='/dev/null';
 			}
-			when ('test-day') {
-				Daily_Parser();
-				shift @ARGV;
-			}
 			when ('test-days') {
 				GetDays();
 				shift @ARGV;
 			}
 			when (/test-now/i) {
-				Current_Parser();
+				GetCurrent();
 				shift @ARGV;
 			}
 			when (/test-hour/i) {
 				#Hourly_Parser();
-				Hourly_Parser();
+				GetHours();
 				shift @ARGV;
 			}
 			when (/test-min/i) {
-				#Hourly_Parser();
-				Minut_Parser();
+				GetMinutes();
 				shift @ARGV;
+			}
+			when ('update-forecast') {
+				GetForecast();
+				shift @ARGV;
+			}
+			when ('forcast'){
+				shift @ARGV;
+				Forecast_Args();
 			}
 			default {
 				say "Unknown Option '$ARGV[0]'";
@@ -596,18 +606,91 @@ sub __Read_Args {
 	}
 	return 0;
 }
-
+sub Forecast_Args {
+	while (@ARGV) {
+		given ($ARGV[0]) {
+			when (/^time$/i) {
+				shift @ARGV;
+				my $time=shift @ARGV;
+			}
+			when (/^type$/i) {
+				shift @ARGV;
+				Type_Arg();
+			}
+			when (/^location$/i) {
+				shift @ARGV;
+				my $loc=shift @ARGV;
+			}
+			default {
+				return;
+			}
+		}
+	}
+}
+sub Time_args {
+	while (@ARGV) {
+		given ($ARGV[0]) {
+			when (/^d(ays?)?$/i) {
+				shift @ARGV;
+				my $time=shift @ARGV;
+			}
+			when (/^h((ou)?rs?)?$/i) {
+				shift @ARGV;
+				my $type=shift @ARGV;
+			}
+			when (/^m(in(ute)?s?)?$/i) {
+				shift @ARGV;
+				my $type=shift @ARGV;
+			}
+			default {
+				return;
+			}
+		}
+	}
+}
+sub TypeArgs {
+	while(@ARGV) {
+		Type_Arg($ARGV[0]);
+	}
+}
+sub Type_Arg {
+	my $oarg=$ARGV[0];
+	my $arg=$oarg;
+	my @Refs;
+	push(@Refs,$FC);
+	my @Keys;
+	while (defined($arg) and $arg ne '') {
+		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
+		my $opener = 1 if $type eq '{';
+		my $closer = 1 if $type eq '}';
+		my $ref=$Refs[-1];
+		if (exists $ref->{$key}) {
+			if ($opener) {
+				push(@Refs,$ref->{$key});
+				push(@Keys,$key);
+			} elsif ($closer) {
+				print $ref->{$key};
+				print NestedKey()
+				pop(@Refs);
+				pop(@Keys);
+			} else {
+				print $ref->{$key};
+			}
+		} else {
+			Wrn "Unknown Key requested<$key> in request<$oarg>.";
+		}
+		$arg=$next;
+	}
+}
 sub PrintHelp {
 say <<"HEREHELP"
 -h for help
--er --enhanced-recs
--err -enhanced-recs-relational
 --link:				Lists Links to recs rather than Listing just the names
---user
--g --genre:			Filters Anime/Manga to Genre.
--kl --keep-list:	Keeps Anime/Manga from the User's list in the recommandations list. 
 -ns --no-save		Doesn't save at the end. Useefull when Testing new changes to the script.
--nul --no-update-list		Doesn't update user list.
+
+update-forecast		Updates the Forecast DB.
+forecast [time <TimeRange>]* [type <WeatherWanted>]*
+	TimeRange=day 1-2
 HEREHELP
 }
 #############
