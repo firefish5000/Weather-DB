@@ -31,12 +31,18 @@ my $Location = "/en/us/lakeland-tn/38002/";
 my $LocationID = "2201989";
 
 my $CONFIG = { };
+#$CONFIG->{Lifetime}{Current}=ToSec('1d');
+#$CONFIG->{Lifetime}{Today}=ToSec('1d'); # Daily forecast for the current day.
+#$CONFIG->{Lifetime}{Minutes}=ToSec('1d');
+#$CONFIG->{Lifetime}{Hours}=ToSec('1d');
+#$CONFIG->{Lifetime}{Days}=ToSec('1d');
+
 $CONFIG->{Lifetime}{Current}=ToSec('1m');
 $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
 $CONFIG->{Lifetime}{Minutes}=ToSec('1m');
 $CONFIG->{Lifetime}{Hours}=ToSec('10m');
 $CONFIG->{Lifetime}{Days}=ToSec('5hr');
-#$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
+$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
@@ -122,7 +128,7 @@ sub Build_Html_Tree {
 	my $path = shift;
 	my $query = shift//'';
 	my $page = join('/',$Site,$Location,$path,$LocationID ) . $query;
-	my $content = get( $page ) or die("Unable to fetch page <" . $page . ">!"); # lwp
+	my $content = get( $page ) or Carp("Unable to fetch page <" . $page . ">!"); # lwp
 	#$lwp->wait_for_page_to_load(15000);
 	my $FCTree = HTML::TreeBuilder::XPath->new_from_content($content);
 	return $FCTree;
@@ -148,9 +154,6 @@ sub IsOld {
 # Weather
 #########
 sub GetForecast { # Parses Extended Forcast
-	my $Root=Build_Html_Tree( 'daily-weather-forecast');
-	#my $Root=Build_Html_Tree( $Location);
-	Msg "Will Get:\nCurrent Minutes Hours Days";
 	# FIXME Need to check parse didn't fail on each, and return error and keep old values if it did.
 	my $tfc = {
 		Current=>{0=>GetCurrent()},
@@ -230,8 +233,8 @@ sub Current_Parser() {
 # Parses Day/Night Subsection
 # Page up to ?hour=curhour+85.
 sub OverwriteTable {
-	my $orig=shift||{};
-	my $new=shift||{};
+	my $orig=shift//{};
+	my $new=shift//{};
 	foreach my $key (keys $new) {
 		$orig->{$key}=$new->{$key};
 	}
@@ -291,6 +294,7 @@ sub Minut_Parser() {
 	my $first=1;
 	my $date;
 	foreach my $Min (@minutes) {
+		# FIXME Check time
 		my $mfc = {};
 		if ($first) {
 			my $hrmin = $Min->findvalue('./span[@class="time"]');
@@ -352,8 +356,8 @@ sub DateParser() {
 sub NamedParser() {
 	my $args=shift;
 	my $name=$args->{name};
-	my $val=$args->{val}||$args->{nval}||undef;
-	my $nval=$args->{nval}||$val;
+	my $val=$args->{val}//$args->{nval}//undef;
+	my $nval=$args->{nval}//$val;
 	my $lFC={};
 	given ($name) {
 		when ('Forecast') { $lFC->{Weather}{Description}=$val; }
@@ -540,7 +544,7 @@ sub ToSec {
 	return $time if $time =~ m{^( '-'? \d+ | inf )$}x;
 	#Croak q{Time Uninitialized} unless defined($time);
 	#while ($time =~ m{ (\d+) \s* ([^0-9 \t]+)?  }gx) {
-	while ($time =~ m{ (\d+(?:\.\d*)?|`\d*\.\d+) \s* ([^0-9 \t]+)?  }gx) {
+	while ($time =~ m{ (\d+(?:\.\d*)?|\d*\.\d+) \s* ([^0-9 \t]+)?  }gx) {
         my $sec = $1;
         my $format=$2 || '';
         if ($format =~ m{^ d(ays?)? $}ix) {
@@ -665,7 +669,7 @@ sub TypeArgs {
 sub Type_Arg {
 	my $oarg=$ARGV[0];
 	my $arg=$oarg;
-	my $Times=shift||[];
+	my $Times=shift//[];
 	my @Refs;
 	push(@Refs,$FC);
 	my @Keys;
@@ -711,88 +715,22 @@ sub Time_Arg {
 	my @Keys;
 	my @Times;
 	while (defined($arg) and $arg ne '') {
-		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
+		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:(\{|\}*\,?)(.*))?$};
 		Err "Parsing No Key in Remaining<$arg> from request<$oarg>." unless (defined $key);
 		my $opener = (defined($type) && $type eq '{') ? 1 : 0;
-		my $closer = (defined($type) && $type eq '}') ? 1 : 0;
+		my $closer = () = $type =~ /\}/g;
 		my $ref=$Refs[-1];
 			if ($opener) {
 				Err "Descending too far for Time arg. Key<$key> in request <$oarg>." if (scalar(@Keys) >= 2);
-				Wrn "HERE Opener";
 				push(@Keys,$key);
 			} elsif ($closer) {
 				Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
-				Wrn "HERE Closure";
-				if ($key =~ m{^([@~]?)([+-]?\d+)([a-zA-Z]*)(?:-(\@?)([+-]?\d+)([a-zA-Z]*))?$}) { # If we are dealing with a time range
-					Wrn "Closure Matches";
-					my $ttype = $Keys[0];
-					my $range=ToSec(1 . $ttype)/2;
-					my $start_relitive=($1) ? (($1 eq '@') ? 0 : 2) : 1 ;
-					my ($start,$start_unit,$end_relitive,$end,$end_unit)=($2,$3//$ttype,( ($4)? 0 : 1),$5,$6//$ttype);
-					my $start_offset;
-					my $end_offset;
-					my $time = time;
-					my $start_time;
-					my $end_time;
-					Wrn "HERE";
-					if ($end) {
-						$start_offset=ToSec($start . ($start_unit//$ttype));
-						$end_offset=ToSec($end . ($end_unit//$ttype));
-						$start_time	= (($start_relitive>=1) ? $time : 0) + $start_offset;
-						$end_time	= (($end_relitive==1) ? $time : 0) + $end_offset;
-						foreach my $ktime (keys $FC->{$ttype}) {
-							next unless(IsDigit($ktime));
-							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
-						}
-					} elsif ($start_relitive == 1) {
-						$end_offset=ToSec(1 . $ttype)/2;
-						$start_offset=ToSec($start . ($start_unit//$ttype)) -$end_offset;
-						$start_time	= $time + $start_offset;
-						$end_time	= $time + $end_offset;
-						foreach my $ktime (keys $FC->{$ttype}) {
-							next unless(IsDigit($ktime));
-							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
-						}
-					} elsif ($start_relitive == 2) {
-						$start_offset=ToSec($start . ($start_unit//$ttype));
-						$start_time	= $time + $start_offset;
-						push(@Times,[$ttype,$start_time]);
-					} else {
-						$start_time=ToSec($start . ($start_unit//$ttype)) ;
-						push(@Times,[$ttype,$start_offset]);
-					}
-				} else {
-					Wrn "Closure NoMatch";
-					push(@Times,[@Keys,$key]);
-				}
-				pop(@Keys);
+				Msg "Closer Using key<$key> with Rem<$arg> in request<$oarg>.";
+				Time_Filtrate(\@Times,\@Keys,\$key);
+				pop(@Keys) for (1 .. $closer);
 			} else {
-				Wrn "HERE NoOpenNoClose";
 				if (scalar @Keys >= 1) {
-					if ($key =~ m{^([+-]?\d+)([a-zA-Z]*)(?:-([+-]?\d+)([a-zA-Z]*))$}) { # If we are dealing with a time range
-						my $ttype = $Keys[0];
-						my $range=ToSec(1 . $ttype)/2;
-						my ($start,$start_unit,$end,$end_unit)=($1,$2//$ttype,$3,$4//$ttype);
-						my $start_offset;
-						my $end_offset;
-						if ($end) {
-							$start_offset=ToSec($start . ($start_unit//$ttype));
-							$end_offset=ToSec($end . ($end_unit//$ttype));
-						} else {
-							$end_offset=ToSec(1 . $ttype)/2;
-							$start_offset=ToSec($start . ($start_unit//$ttype)) - $end_offset;
-						}
-						my $time = time;
-						foreach my $ktime (keys $FC->{$ttype}) {
-							next unless(IsDigit($ktime));
-							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
-						}
-					} else {
-						my $nk = NestedHash(Hash=>$FC,Keys=>[@Keys,$key]);
-						next unless ($nk->{Exists});
-						Err $nk->{Error} if ($nk->{Error});
-						push(@Times,[@Keys,$key]);
-					}
+					Time_Filtrate(\@Times,\@Keys,\$key);
 				} else {
 					foreach my $time (keys $FC->{$key}) {
 						next unless(IsDigit($time));
@@ -802,53 +740,52 @@ sub Time_Arg {
 			}
 		$arg=$next;
 	}
+	#Info Dumper @Times;
 	return \@Times;
 }
 sub Time_Filtrate {
-	my @Times=@{shift()};
+	my $Times=shift();
 	my @Keys=@{shift()};
-	my $key=shift;
-	if ($key =~ m{^([@~]?)([+-]?\d+)([a-zA-Z]*)(?:-(\@?)([+-]?\d+)([a-zA-Z]*))?$}) { # If we are dealing with a time range
-		Wrn "Closure Matches";
+	my $key=${shift()};
+	my $digit = qr{(?:(?:\d+(?:\.\d*)?)|(?:\d*\.\d+))};
+	if ($key =~ m{^([@~]?)([+-]?$digit)([a-zA-Z]*)(?:-(\@?)([+-]?$digit)([a-zA-Z]*))?$}) { # If we are dealing with a time range
 		my $ttype = $Keys[0];
 		my $range=ToSec(1 . $ttype)/2;
 		my $start_relitive=($1) ? (($1 eq '@') ? 0 : 2) : 1 ;
-		my ($start,$start_unit,$end_relitive,$end,$end_unit)=($2,$3//$ttype,( ($4)? 0 : 1),$5,$6//$ttype);
+		my ($start,$start_unit,$end_relitive,$end,$end_unit)=($2,$3||$ttype,( ($4)? 0 : 1),$5,$6||$ttype);
 		my $start_offset;
 		my $end_offset;
 		my $time = time;
 		my $start_time;
 		my $end_time;
-		Wrn "HERE";
 		if ($end) {
-			$start_offset=ToSec($start . ($start_unit//$ttype));
-			$end_offset=ToSec($end . ($end_unit//$ttype));
+			$start_offset=ToSec($start . ($start_unit||$ttype));
+			$end_offset=ToSec($end . ($end_unit||$ttype));
 			$start_time	= (($start_relitive>=1) ? $time : 0) + $start_offset;
 			$end_time	= (($end_relitive==1) ? $time : 0) + $end_offset;
 			foreach my $ktime (keys $FC->{$ttype}) {
 				next unless(IsDigit($ktime));
-				push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+				push(@$Times,[$ttype,$ktime]) if (($end_time) >= $ktime && $ktime >= ($start_time));
 			}
 		} elsif ($start_relitive == 1) {
 			$end_offset=ToSec(1 . $ttype)/2;
-			$start_offset=ToSec($start . ($start_unit//$ttype)) -$end_offset;
-			$start_time	= $time + $start_offset;
-			$end_time	= $time + $end_offset;
+			$start_offset=ToSec($start . ($start_unit||$ttype));
+			$start_time	= $time + $start_offset - $end_offset;
+			$end_time	= $time + $start_offset + $end_offset;
 			foreach my $ktime (keys $FC->{$ttype}) {
 				next unless(IsDigit($ktime));
-				push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+				push(@$Times,[$ttype,$ktime]) if (($end_time) >= $ktime && $ktime >= ($start_time));
 			}
 		} elsif ($start_relitive == 2) {
-			$start_offset=ToSec($start . ($start_unit//$ttype));
+			$start_offset=ToSec($start . ($start_unit||$ttype));
 			$start_time	= $time + $start_offset;
-			push(@Times,[$ttype,$start_time]);
+			push(@$Times,[$ttype,$start_time]);
 		} else {
-			$start_time=ToSec($start . ($start_unit//$ttype)) ;
-			push(@Times,[$ttype,$start_offset]);
+			$start_time=ToSec($start . ($start_unit||$ttype)) ;
+			push(@$Times,[$ttype,$start_offset]);
 		}
 	} else {
-		Wrn "Closure NoMatch";
-		push(@Times,[@Keys,$key]);
+		push(@$Times,[@Keys,$key]);
 	}
 }
 
