@@ -41,9 +41,9 @@ $CONFIG->{Lifetime}{Current}=ToSec('1m');
 $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
 $CONFIG->{Lifetime}{Minutes}=ToSec('1m');
 $CONFIG->{Lifetime}{Hours}=ToSec('10m');
-$CONFIG->{Lifetime}{Days}=ToSec('5hr');
-$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
+$CONFIG->{Lifetime}{Days}=ToSec('5h');
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
+#$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
 $CONFIG->{Get}{Hourly}=1;
@@ -297,20 +297,14 @@ sub Minut_Parser() {
 		# FIXME Check time
 		my $mfc = {};
 		if ($first) {
-			my $hrmin = $Min->findvalue('./span[@class="time"]');
+			#my $hrmin = $Min->findvalue('./span[@class="time"]');
+			my $hrmin = $Min->findvalue('//div[@id="content"]//div[@class="panel minute-tabs"]//ul[@class="thefeed-tab-buttons"]/li/a[@class="feed current"]');
 			$date = qx{date --date='$hrmin' +%s}; # FIXME remove all qx/syscalls
 			chomp($date);
 			$first=0;
 		}
 		$mfc->{Time} = $date;
 		# FIXME NOTE TODO Possible Risk of Jumping Minutes. Add checks and a better converter.
-		#my $hrmin = $Min->findvalue('./span[@class="time"]');
-		#my $chkdate = qx{date --date='$hrmin' +%s}; # FIXME remove all qx/syscalls
-		#chomp($chkdate);
-		#my $chkhrmin =  qx{date --date='\@$date' +%H:%M};
-		#chomp($chkhrmin);
-		#Wrn 'Date ', $chkhrmin, ' Accu ', $Min->findvalue('./span[@class="time"]');
-		#Info 'Date ', $date, ' Accu ', $chkdate;
 		$mfc->{Weather}{Description} = $Min->findvalue('./span[@class="type"]');
 		$mfc->{Range} = ToSec('1m');
 		$mfc->{LastUpdated} = time;
@@ -350,6 +344,8 @@ sub DateParser() {
 	my ($month,$day) = $Root->findvalue('//div[@id="feed-tabs"]/ul/li[contains(@class,"current")]/div/h4') =~ m{^(\S+)\s+(\d+)$};
 	my $date = qx{date --date='$month $day' +%s};
 	use DateTime;
+	$date =~ s{\s}{}g;
+	chomp($date);
 	# return DateTime->new(month => $month, day => $day, time_zone => "America/Chicago")->epoche();
 	return $date;
 }
@@ -561,6 +557,10 @@ sub ToSec {
     }
     return $Seconds;
 }
+# TODO: Should we add month/year? what do we do for leap days and month size? Perhaps a way to do this only for @exact?
+#        if ($format =~ m{^ y((ea)?rs?)? $}ix) {
+#           $Seconds+=$sec*60*60*24;
+#		} elsif ($format =~ m{^ mon(th)?s? $}ix) {
 
 sub __Read_Args {
 	PARSE_ARGUMENTS:
