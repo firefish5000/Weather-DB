@@ -35,7 +35,7 @@ $CONFIG->{Lifetime}{Current}=ToSec('1m');
 $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
 $CONFIG->{Lifetime}{Minutes}=ToSec('1m');
 $CONFIG->{Lifetime}{Hours}=ToSec('10m');
-$CONFIG->{Lifetime}{Days}=ToSec('1hr');
+$CONFIG->{Lifetime}{Days}=ToSec('5hr');
 #$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 $CONFIG->{Get}{Current}=1;
@@ -98,10 +98,11 @@ my $IFC_Examp = {
 	},
 };
 my $FC_Example={
-	Current=>$IFC,
-	Minutes=>{minsec1=>$IFC,minsec2=>$IFC},
-	Hours=>{HrSec1=>$IFC,HrSec2=>$IFC},
-	Days=>{DaySec1=>$IFC,DaySec2=>$IFC},
+	# Current now prepended with 0 for start-time for 
+	Current=>{0=>$IFC},
+	Minutes=>{starttime1=>$IFC,starttime=>$IFC},
+	Hours=>{starttime1=>$IFC,starttime2=>$IFC},
+	Days=>{starttime1=>$IFC,starttime2=>$IFC},
 };
 }
 $FC=retrieve($STORE_FILE) if ( -e $STORE_FILE);
@@ -152,13 +153,14 @@ sub GetForecast { # Parses Extended Forcast
 	Msg "Will Get:\nCurrent Minutes Hours Days";
 	# FIXME Need to check parse didn't fail on each, and return error and keep old values if it did.
 	my $tfc = {
-		Current=>GetCurrent(),
+		Current=>{0=>GetCurrent()},
 		Minutes=>GetMinutes(),
 		Hours=>GetHours(),
 		Days=>GetDays(),
 	};
 	$FC=$tfc;
-	Info Dumper $FC;
+	#Info Dumper $FC;
+	store($FC, $STORE_FILE);
 	return $FC
 }
 
@@ -427,7 +429,7 @@ sub NestedHash {
 		Croak "NestedHash requires key '$key' to be passed." unless exists $args->{$key};
 	}
 	foreach my $key (keys $args) {
-		Carp "NestedHash does not take a '$key' key." unless ($key ~~ @accepted_args);
+		Carp "NestedHash does not take a '$key' key. Please use only<" .join(' ',@accepted_args) .'>' unless ($key ~~ @accepted_args);
 	}
 	Croak "NestedHash's Assighn must be either 'Set', 'Appened'/'Add', 'Merge', 'IfNonExisting', or 'IfUndef'." unless ($args->{Assighn} ~~ @{[qw{Set Add Appened Merge IfNonExisting IfUndef NonExisting Undef}]});
 	$args->{Assighn} = 'Appened' if ($args->{Assighn} eq 'Add');
@@ -545,7 +547,7 @@ sub ToSec {
             $Seconds+=$sec*60*60*24;
 		} elsif ($format =~ m{^ h((ou)?rs?)? $}ix) {
             $Seconds+=$sec*60*60;
-        } elsif ($format =~ m{^ m(in(ut)?s?)? $}ix) {
+        } elsif ($format =~ m{^ m(in(ute)?s?)? $}ix) {
             $Seconds+=$sec*60;
         } elsif ($format =~ m{^ (s(ec(ond)?s?)?)? $}ix) {
             $Seconds+=$sec;
@@ -597,6 +599,10 @@ sub __Read_Args {
 				shift @ARGV;
 				Forecast_Args();
 			}
+			when ('retrieve'){
+				shift @ARGV;
+				Time_Args();
+			}
 			default {
 				say "Unknown Option '$ARGV[0]'";
 				PrintHelp();
@@ -607,15 +613,18 @@ sub __Read_Args {
 	return 0;
 }
 sub Forecast_Args {
+	my $Time=[];
 	while (@ARGV) {
 		given ($ARGV[0]) {
 			when (/^time$/i) {
 				shift @ARGV;
-				my $time=shift @ARGV;
+				$Time=Time_Arg();
+				shift @ARGV;
 			}
 			when (/^type$/i) {
 				shift @ARGV;
-				Type_Arg();
+				Type_Arg($Time);
+				shift @ARGV;
 			}
 			when (/^location$/i) {
 				shift @ARGV;
@@ -656,29 +665,223 @@ sub TypeArgs {
 sub Type_Arg {
 	my $oarg=$ARGV[0];
 	my $arg=$oarg;
+	my $Times=shift||[];
 	my @Refs;
 	push(@Refs,$FC);
 	my @Keys;
 	while (defined($arg) and $arg ne '') {
 		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
-		my $opener = 1 if $type eq '{';
-		my $closer = 1 if $type eq '}';
+		my $opener = (defined($type) && $type eq '{') ? 1 : 0;
+		my $closer = (defined($type) && $type eq '}') ? 1 : 0;
 		my $ref=$Refs[-1];
-		if (exists $ref->{$key}) {
 			if ($opener) {
-				push(@Refs,$ref->{$key});
+				#	push(@Refs,$ref->{$key});
 				push(@Keys,$key);
 			} elsif ($closer) {
-				print $ref->{$key};
-				print NestedKey()
-				pop(@Refs);
+				#Info $ref->{$key};
+				#foreach my $time (@{$CONFIG->{Times}}) {
+				Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
+				foreach my $time (@{$Times}) {
+					my $nestedkeys = [@{$time},@Keys,$key];
+					my $nk = NestedHash(Hash=>$FC,Keys=>$nestedkeys);
+					next unless ($nk->{Exists});
+					Err $nk->{Error} if ($nk->{Error});
+					Msg (CWrn(join('>', @$nestedkeys)),' ', (Dumper $nk->{Value}));
+				}
+				#pop(@Refs);
 				pop(@Keys);
 			} else {
-				print $ref->{$key};
+				#print $ref->{$key};
+				foreach my $time (@{$Times}) {
+					my $nestedkeys = [@{$time},@Keys,$key];
+					my $nk = NestedHash(Hash=>$FC,Keys=>$nestedkeys);
+					next unless ($nk->{Exists});
+					Err $nk->{Error} if ($nk->{Error});
+					Msg (CWrn(join('>', @$nestedkeys)),' ', (Dumper $nk->{Value}));
+				}
 			}
+		$arg=$next;
+	}
+}
+sub Time_Arg {
+	my $oarg=$ARGV[0];
+	my $arg=$oarg;
+	my @Refs;
+	push(@Refs,$FC);
+	my @Keys;
+	my @Times;
+	while (defined($arg) and $arg ne '') {
+		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
+		Err "Parsing No Key in Remaining<$arg> from request<$oarg>." unless (defined $key);
+		my $opener = (defined($type) && $type eq '{') ? 1 : 0;
+		my $closer = (defined($type) && $type eq '}') ? 1 : 0;
+		my $ref=$Refs[-1];
+			if ($opener) {
+				Err "Descending too far for Time arg. Key<$key> in request <$oarg>." if (scalar(@Keys) >= 2);
+				Wrn "HERE Opener";
+				push(@Keys,$key);
+			} elsif ($closer) {
+				Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
+				Wrn "HERE Closure";
+				if ($key =~ m{^([@~]?)([+-]?\d+)([a-zA-Z]*)(?:-(\@?)([+-]?\d+)([a-zA-Z]*))?$}) { # If we are dealing with a time range
+					Wrn "Closure Matches";
+					my $ttype = $Keys[0];
+					my $range=ToSec(1 . $ttype)/2;
+					my $start_relitive=($1) ? (($1 eq '@') ? 0 : 2) : 1 ;
+					my ($start,$start_unit,$end_relitive,$end,$end_unit)=($2,$3//$ttype,( ($4)? 0 : 1),$5,$6//$ttype);
+					my $start_offset;
+					my $end_offset;
+					my $time = time;
+					my $start_time;
+					my $end_time;
+					Wrn "HERE";
+					if ($end) {
+						$start_offset=ToSec($start . ($start_unit//$ttype));
+						$end_offset=ToSec($end . ($end_unit//$ttype));
+						$start_time	= (($start_relitive>=1) ? $time : 0) + $start_offset;
+						$end_time	= (($end_relitive==1) ? $time : 0) + $end_offset;
+						foreach my $ktime (keys $FC->{$ttype}) {
+							next unless(IsDigit($ktime));
+							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+						}
+					} elsif ($start_relitive == 1) {
+						$end_offset=ToSec(1 . $ttype)/2;
+						$start_offset=ToSec($start . ($start_unit//$ttype)) -$end_offset;
+						$start_time	= $time + $start_offset;
+						$end_time	= $time + $end_offset;
+						foreach my $ktime (keys $FC->{$ttype}) {
+							next unless(IsDigit($ktime));
+							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+						}
+					} elsif ($start_relitive == 2) {
+						$start_offset=ToSec($start . ($start_unit//$ttype));
+						$start_time	= $time + $start_offset;
+						push(@Times,[$ttype,$start_time]);
+					} else {
+						$start_time=ToSec($start . ($start_unit//$ttype)) ;
+						push(@Times,[$ttype,$start_offset]);
+					}
+				} else {
+					Wrn "Closure NoMatch";
+					push(@Times,[@Keys,$key]);
+				}
+				pop(@Keys);
+			} else {
+				Wrn "HERE NoOpenNoClose";
+				if (scalar @Keys >= 1) {
+					if ($key =~ m{^([+-]?\d+)([a-zA-Z]*)(?:-([+-]?\d+)([a-zA-Z]*))$}) { # If we are dealing with a time range
+						my $ttype = $Keys[0];
+						my $range=ToSec(1 . $ttype)/2;
+						my ($start,$start_unit,$end,$end_unit)=($1,$2//$ttype,$3,$4//$ttype);
+						my $start_offset;
+						my $end_offset;
+						if ($end) {
+							$start_offset=ToSec($start . ($start_unit//$ttype));
+							$end_offset=ToSec($end . ($end_unit//$ttype));
+						} else {
+							$end_offset=ToSec(1 . $ttype)/2;
+							$start_offset=ToSec($start . ($start_unit//$ttype)) - $end_offset;
+						}
+						my $time = time;
+						foreach my $ktime (keys $FC->{$ttype}) {
+							next unless(IsDigit($ktime));
+							push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+						}
+					} else {
+						my $nk = NestedHash(Hash=>$FC,Keys=>[@Keys,$key]);
+						next unless ($nk->{Exists});
+						Err $nk->{Error} if ($nk->{Error});
+						push(@Times,[@Keys,$key]);
+					}
+				} else {
+					foreach my $time (keys $FC->{$key}) {
+						next unless(IsDigit($time));
+						push(@Times, [$key,$time]);
+					}
+				}
+			}
+		$arg=$next;
+	}
+	return \@Times;
+}
+sub Time_Filtrate {
+	my @Times=@{shift()};
+	my @Keys=@{shift()};
+	my $key=shift;
+	if ($key =~ m{^([@~]?)([+-]?\d+)([a-zA-Z]*)(?:-(\@?)([+-]?\d+)([a-zA-Z]*))?$}) { # If we are dealing with a time range
+		Wrn "Closure Matches";
+		my $ttype = $Keys[0];
+		my $range=ToSec(1 . $ttype)/2;
+		my $start_relitive=($1) ? (($1 eq '@') ? 0 : 2) : 1 ;
+		my ($start,$start_unit,$end_relitive,$end,$end_unit)=($2,$3//$ttype,( ($4)? 0 : 1),$5,$6//$ttype);
+		my $start_offset;
+		my $end_offset;
+		my $time = time;
+		my $start_time;
+		my $end_time;
+		Wrn "HERE";
+		if ($end) {
+			$start_offset=ToSec($start . ($start_unit//$ttype));
+			$end_offset=ToSec($end . ($end_unit//$ttype));
+			$start_time	= (($start_relitive>=1) ? $time : 0) + $start_offset;
+			$end_time	= (($end_relitive==1) ? $time : 0) + $end_offset;
+			foreach my $ktime (keys $FC->{$ttype}) {
+				next unless(IsDigit($ktime));
+				push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+			}
+		} elsif ($start_relitive == 1) {
+			$end_offset=ToSec(1 . $ttype)/2;
+			$start_offset=ToSec($start . ($start_unit//$ttype)) -$end_offset;
+			$start_time	= $time + $start_offset;
+			$end_time	= $time + $end_offset;
+			foreach my $ktime (keys $FC->{$ttype}) {
+				next unless(IsDigit($ktime));
+				push(@Times,[$ttype,$ktime]) if (($time + $end_offset) >= $ktime && $ktime >= ($time - $start_offset));
+			}
+		} elsif ($start_relitive == 2) {
+			$start_offset=ToSec($start . ($start_unit//$ttype));
+			$start_time	= $time + $start_offset;
+			push(@Times,[$ttype,$start_time]);
 		} else {
-			Wrn "Unknown Key requested<$key> in request<$oarg>.";
+			$start_time=ToSec($start . ($start_unit//$ttype)) ;
+			push(@Times,[$ttype,$start_offset]);
 		}
+	} else {
+		Wrn "Closure NoMatch";
+		push(@Times,[@Keys,$key]);
+	}
+}
+
+sub ForecastFilter_Arg {
+	my $oarg=$ARGV[0];
+	my $arg=$oarg;
+	my @Refs;
+	push(@Refs,$FC);
+	my @Keys;
+	while (defined($arg) and $arg ne '') {
+		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
+		my $opener = (defined($type) && $type eq '{') ? 1 : 0;
+		my $closer = (defined($type) && $type eq '}') ? 1 : 0;
+		my $ref=$Refs[-1];
+			if ($opener) {
+				#	push(@Refs,$ref->{$key});
+				push(@Keys,$key);
+			} elsif ($closer) {
+				#Info $ref->{$key};
+				#foreach my $time (@{$CONFIG->{Times}}) {
+				my $nk = NestedHash(Hash=>$FC,Keys=>[@Keys,$key]);
+				next unless ($nk->{Exists});
+				Err $nk->{Error} if ($nk->{Error});
+				Msg (CWrn(join('>', @Keys, $key)),' ', (Dumper $nk->{Value}));
+				#pop(@Refs);
+				pop(@Keys);
+			} else {
+				#print $ref->{$key};
+				my $nk = NestedHash(Hash=>$FC,Keys=>[@Keys,$key]);
+				next unless ($nk->{Exists});
+				Err $nk->{Error} if ($nk->{Error});
+				Msg (CWrn(join('>', @Keys, $key)),' ', (Dumper $nk->{Value}));
+			}
 		$arg=$next;
 	}
 }
