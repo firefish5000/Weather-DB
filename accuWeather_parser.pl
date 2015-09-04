@@ -80,7 +80,8 @@ my $FC={};
 sub NO_OP {
 	return;
 	my $IFC;
-my $IFC_Examp = {
+my $LFC_Examp = { # LocaleTime Forecast Example
+	# TODO Default Values?
 	Time=>0, # The time the forecast refers to
 	Range=>'24h', # How long the forecast refers to.(current=0s,minutcast=60s,hourly=60min,daily=24hr)
 	LastUpdated=>0,
@@ -110,6 +111,22 @@ my $FC_Example={
 	Hours=>{starttime1=>$IFC,starttime2=>$IFC},
 	Days=>{starttime1=>$IFC,starttime2=>$IFC},
 };
+my $FC = {
+	Locations=>{
+		LastUpdated=>0, # Should only change when a comprehensive, full update occured on its children.
+		SOMEPLACE1=>{
+			LastUpdated=>0, # Should only change when a comprehensive, full update occured on its children.
+			Days=> {
+				LastUpdated=>0,
+				
+			}
+		},
+		SOMEPLACE2=>{
+			LastUpdated=>0,
+		},
+	}
+	Time=>
+}
 }
 $FC=retrieve($STORE_FILE) if ( -e $STORE_FILE);
 #StoreUpdate();
@@ -143,10 +160,10 @@ sub IsOld {
 	my $LifeTime=shift//0;
 	#return 1 if	($LastUpdate + $LifeTime <= time );
 	if	($LastUpdate + $LifeTime <= time ) {
-		Info "It's Old $LastUpdate + $LifeTime <= " . time;
+		#Info "It's Old $LastUpdate + $LifeTime <= " . time;
 		return 1;
 	}
-	Info "It's Good $LastUpdate + $LifeTime > " . time;
+	#Info "It's Good $LastUpdate + $LifeTime > " . time;
 	return 0;
 }
 
@@ -617,17 +634,19 @@ sub __Read_Args {
 	return 0;
 }
 sub Forecast_Args {
-	my $Time=[];
+	my $Times;
+	my $Locations;
+	my $Types;
 	while (@ARGV) {
 		given ($ARGV[0]) {
 			when (/^time$/i) {
 				shift @ARGV;
-				$Time=Time_Arg();
+				$Times=Time_Arg($Times);
 				shift @ARGV;
 			}
 			when (/^type$/i) {
 				shift @ARGV;
-				Type_Arg($Time);
+				$Types=Type_Arg($Types);
 				shift @ARGV;
 			}
 			when (/^location$/i) {
@@ -639,81 +658,73 @@ sub Forecast_Args {
 			}
 		}
 	}
-}
-sub Time_args {
-	while (@ARGV) {
-		given ($ARGV[0]) {
-			when (/^d(ays?)?$/i) {
-				shift @ARGV;
-				my $time=shift @ARGV;
-			}
-			when (/^h((ou)?rs?)?$/i) {
-				shift @ARGV;
-				my $type=shift @ARGV;
-			}
-			when (/^m(in(ute)?s?)?$/i) {
-				shift @ARGV;
-				my $type=shift @ARGV;
-			}
-			default {
-				return;
+	my @Keys;
+	if (defined($Locations)) {
+	} else {
+		$Locations=[keys $FC];
+	}
+	foreach my $location (@{$Locations}) {
+		if (defined($Times)) {
+			foreach()
+		} else {
+			my $someplace = NestedHash(Hash=>$FC,Keys=>$location);
+			next unless ($someplace->{Exists});
+			next unless (ref($someplace->{Value}) eq 'HASH');
+			foreach my $timeunit (keys $someplace->{Value})
+				next unless ($timeunit);
+				my $timeunit = NestedHash(Hash=>$FC,Keys=>$location);
+				next unless(ref($someplace->{Value}{$timeunit}) eq 'HASH');
+				next unless(ref($someplace->{Value}{$timeunit}));
+				$Times=[$timeunit]
 			}
 		}
-	}
-}
-sub TypeArgs {
-	while(@ARGV) {
-		Type_Arg($ARGV[0]);
+			my $someplace = NestedHash(Hash=>$FC,Keys=>$location)->{Value});
+			foreach my $sometime (keys $sometime) ) {
+				$sometime->{}
+			}
+		}
+		foreach my $time (defined($Times) ? @{$Times} : keys NestedHash(Hash=>$FC,Keys=>[@$location]) ) {
+			next unless(IsDigit($time));
+			next unless (NestedHash(Hash=>$FC,Keys=>[@$location,@$time])->{Exists});
+			foreach my $type (defined($Types) ? @{$Types} : keys $FC->{$location}{$time}) {
+				next unless (NestedHash(Hash=>$FC,Keys=>[@$location,@$time,@$type])->{Exists});
+				my $nestkeys=[@$location,@$time,@$type];
+				my $nk = NestedHash(Hash=>$FC,Keys=>$nestkeys);
+				next unless ($nk->{Exists});
+				Err $nk->{Error} if ($nk->{Error});
+				Msg (CWrn(join('>', @$nestkeys)),' ', (Dumper $nk->{Value}));
+			}
+		}
 	}
 }
 sub Type_Arg {
 	my $oarg=$ARGV[0];
 	my $arg=$oarg;
-	my $Times=shift//[];
-	my @Refs;
-	push(@Refs,$FC);
+	my $Types=shift||[];
 	my @Keys;
 	while (defined($arg) and $arg ne '') {
 		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:([{},])(.*))?$};
 		my $opener = (defined($type) && $type eq '{') ? 1 : 0;
 		my $closer = (defined($type) && $type eq '}') ? 1 : 0;
 		my $ref=$Refs[-1];
-			if ($opener) {
-				#	push(@Refs,$ref->{$key});
-				push(@Keys,$key);
-			} elsif ($closer) {
-				#Info $ref->{$key};
-				#foreach my $time (@{$CONFIG->{Times}}) {
-				Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
-				foreach my $time (@{$Times}) {
-					my $nestedkeys = [@{$time},@Keys,$key];
-					my $nk = NestedHash(Hash=>$FC,Keys=>$nestedkeys);
-					next unless ($nk->{Exists});
-					Err $nk->{Error} if ($nk->{Error});
-					Msg (CWrn(join('>', @$nestedkeys)),' ', (Dumper $nk->{Value}));
-				}
-				#pop(@Refs);
-				pop(@Keys);
-			} else {
-				#print $ref->{$key};
-				foreach my $time (@{$Times}) {
-					my $nestedkeys = [@{$time},@Keys,$key];
-					my $nk = NestedHash(Hash=>$FC,Keys=>$nestedkeys);
-					next unless ($nk->{Exists});
-					Err $nk->{Error} if ($nk->{Error});
-					Msg (CWrn(join('>', @$nestedkeys)),' ', (Dumper $nk->{Value}));
-				}
-			}
+		if ($opener) {
+			push(@Keys,$key);
+		} elsif ($closer) {
+			Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
+			push(@$Types,[@Keys,$key]);
+			pop(@Keys);
+		} else {
+			push(@$Types,[@Keys,$key]);
+		}
 		$arg=$next;
 	}
+	return $Types
 }
 sub Time_Arg {
 	my $oarg=$ARGV[0];
 	my $arg=$oarg;
-	my @Refs;
-	push(@Refs,$FC);
 	my @Keys;
-	my @Times;
+	my $Times=shift||{};
 	while (defined($arg) and $arg ne '') {
 		my ($key,$type,$next) = $arg =~ m{^([^{},]+)(?:(\{|\}*\,?)(.*))?$};
 		Err "Parsing No Key in Remaining<$arg> from request<$oarg>." unless (defined $key);
@@ -726,22 +737,22 @@ sub Time_Arg {
 			} elsif ($closer) {
 				Err "Closer after key<$key> without matching opener in request<$oarg>." unless (scalar(@Keys));
 				Msg "Closer Using key<$key> with Rem<$arg> in request<$oarg>.";
-				Time_Filtrate(\@Times,\@Keys,\$key);
+				Time_Filtrate($Times,\@Keys,\$key);
 				pop(@Keys) for (1 .. $closer);
 			} else {
 				if (scalar @Keys >= 1) {
-					Time_Filtrate(\@Times,\@Keys,\$key);
+					Time_Filtrate($Times,\@Keys,\$key);
 				} else {
 					foreach my $time (keys $FC->{$key}) {
 						next unless(IsDigit($time));
-						push(@Times, [$key,$time]);
+						push(@$Times, [$key,$time]);
 					}
 				}
 			}
 		$arg=$next;
 	}
 	#Info Dumper @Times;
-	return \@Times;
+	return $Times;
 }
 sub Time_Filtrate {
 	my $Times=shift();
@@ -787,6 +798,7 @@ sub Time_Filtrate {
 	} else {
 		push(@$Times,[@Keys,$key]);
 	}
+	return $Times;
 }
 
 sub ForecastFilter_Arg {
