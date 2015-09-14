@@ -191,7 +191,8 @@ sub GetDays() {
 	$tfc->{Range}=ToSec('24h');
 	$tfc->{LastUpdated}=time;
 	for my $i (1..45) {
-		my $day = Daily_Parser($Location,%$args,day=>$i);
+		# my $day = Daily_Parser($Location,%$args,day=>$i); # Downt know what to do with
+		my $day = Daily_Parser(Location=>$Location,%$args,day=>$i);
 		$tfc->{$day->{Time}}=$day;
 	}
 	$FC->{Locations}{$Location}=$tfc;
@@ -206,22 +207,26 @@ sub GetHours() {
 	return $tfc;
 }
 sub GetMinutes() {
+	my $FC = shift;
 	my $Location = shift; # TODO/FIXME
 	my $tfc = $FC->{Locations}{$Location}{Minutes}//{};
 	return $tfc unless IsOld($tfc->{LastUpdated},$FC->{Lifetime}{Minutes});
-	$tfc = Minut_Parser();
+	$tfc = Minut_Parser($Location);
 	return $tfc;
 }
 sub GetCurrent() {
+	my $FC = shift;
 	my $Location = shift; # TODO/FIXME
 	my $tfc = $FC->{Locations}{$Location}{Current}//{};
 	return $tfc unless IsOld($tfc->{LastUpdated},$FC->{Lifetime}{Current});
-	$tfc = Current_Parser();
+	$tfc = Current_Parser($Location);
 	return $tfc;
 }
 sub Daily_Parser() {
-	my $day=shift//1;
-	my $Root=Build_Html_Tree( 'daily-weather-forecast',"?day=$day" );
+	my $args={@_};
+	my $Location=$args->{Location};
+	my $day=$args->{day}//1;
+	my $Root=Build_Html_Tree( $Location, 'daily-weather-forecast',"?day=$day" );
 	my $tfc = {}; # ForCast
 	$tfc->{Time}=DateParser($Root);
 	$tfc->{Range}=ToSec('24h');
@@ -236,6 +241,7 @@ sub Daily_Parser() {
 	return $tfc;
 }
 sub Current_Parser() {
+	my $Location=shift;
 	my $Root=Build_Html_Tree('current-weather');
 	my $tfc = {}; # ForCast
 	$tfc->{Time}=0;
