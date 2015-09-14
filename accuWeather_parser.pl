@@ -37,6 +37,7 @@ my $CONFIG = { };
 #$CONFIG->{Lifetime}{Hours}=ToSec('1d');
 #$CONFIG->{Lifetime}{Days}=ToSec('1d');
 
+#NOTE These config defaults will be removed, latter defaults will be specified vi
 $CONFIG->{Lifetime}{Current}=ToSec('1m');
 $CONFIG->{Lifetime}{Today}=ToSec('1hr'); # Daily forecast for the current day.
 $CONFIG->{Lifetime}{Minutes}=ToSec('1m');
@@ -44,6 +45,8 @@ $CONFIG->{Lifetime}{Hours}=ToSec('10m');
 $CONFIG->{Lifetime}{Days}=ToSec('5h');
 $CONFIG->{Lifetime}{Advisories}=ToSec('1m');
 #$CONFIG->{Lifetime}{Days}=ToSec('1hr'); # TODO Dynamic ranges. Eg, Lifetime>Days>1=1hr, Liftime>Days>2-7=5hr, Lifetime>Days>8-45=2days
+$CONFIG->{Locations}{NAME}{Path}="/en/us/lakeland-tn/38002/";
+$CONFIG->{Locations}{NAME}{ID}="2201989"; # Daily forecast for the current day.
 $CONFIG->{Get}{Current}=1;
 $CONFIG->{Get}{MinuteCast}=1;
 $CONFIG->{Get}{Hourly}=1;
@@ -144,7 +147,7 @@ store($FC, $STORE_FILE);
 sub Build_Html_Tree {
 	my $path = shift;
 	my $query = shift//'';
-	my $page = join('/',$Site,$Location,$path,$LocationID ) . $query;
+	my $page = join('/',$Site,$Location,$path,$LocationID) . $query;
 	my $content = get( $page ) or Carp("Unable to fetch page <" . $page . ">!"); # lwp
 	#$lwp->wait_for_page_to_load(15000);
 	my $FCTree = HTML::TreeBuilder::XPath->new_from_content($content);
@@ -173,6 +176,8 @@ sub IsOld {
 sub GetForecast { # Parses Extended Forcast
 	# FIXME Need to check parse didn't fail on each, and return error and keep old values if it did.
 	my $tfc = {
+		
+		LastUpdated=>time,
 		Current=>{0=>GetCurrent()},
 		Minutes=>GetMinutes(),
 		Hours=>GetHours(),
