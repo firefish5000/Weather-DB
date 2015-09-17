@@ -209,11 +209,20 @@ sub Daily_Parser() {
 	$tfc->{Range}=ToSec('24h');
 	$tfc->{LastUpdated}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
-		$tfc={%{$tfc},%{ForecastInfo_Parser($DayCast)}};
+		my $class = $DayCast->findvalue('./@class');
+		my ($MorningOrNight) = $class =~ m{^(day|night)$} or Croak qq{Daily parser got class <$class>, which does not match the known classes of day/night};
+		$MorningOrNight = ($MorningOrNight eq q{day}) ? q{Morning} : q{Night};
+		# Some Daily_tab specific parsers
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
-			#TODO Desc
-			my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
-			$tfc= { %{$tfc}, %{Stats_Parser($Stats)} };
+		$tfc->{$MorningOrNight}{Condition} = $Cont->findvalue('./div[@class="desc"]/p') or Carp q{Could not find Condition};
+		# Utilize genaric Parsers
+		$tfc->{$MorningOrNight} = {%$tfc,%{ForecastInfo_Parser($DayCast)} };
+		#TODO Desc
+		my $Stats = $Cont->findnodes('./ul[@class="stats"]')->[0];
+		$tfc->{$MorningOrNight} = {%$tfc, %{Stats_Parser($Stats)} };
+		# Store High/Low
+		$tfc->{Temp}{High} = $tfc->{$MorningOrNight}{Temp} if (exists $tfc->{$MorningOrNight}{Temp} && $tfc->{Temp}{High} < $tfc->{$MorningOrNight}{Temp});
+		$tfc->{Temp}{Low} = $tfc->{$MorningOrNight}{Temp} if (exists $tfc->{$MorningOrNight}{Temp}{Avg} && $tfc->{Temp}{Low} > $tfc->{$MorningOrNight}{Temp}{Avg});
 	}
 	return $tfc;
 }
@@ -368,7 +377,7 @@ sub NamedParser() {
 	given ($name) {
 		when ('Forecast') { $lFC->{Weather}{Description}=$val; }
 		when (/^Wind/) { $lFC->{Weather}{Wind}{Speed}=$val; }
-		when (/^Temp/) { $lFC->{Weather}{Temp}=$val; }
+		when (/^Temp/) { $lFC->{Weather}{Temp}{Avg}=$val; }
 		when (/^RealFeel/) { $lFC->{Feel}{Temp}=$val; }
 		when ('Max UV Index') { $lFC->{Weather}{UV_Index}{Max}=$val; }
 		when ('Thunderstorms') { $lFC->{Weather}{Thunder}{Chance}=$val; }

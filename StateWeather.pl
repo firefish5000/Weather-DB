@@ -28,6 +28,7 @@ DebugConfig(
 my $FC = WeatherDB::AccuWeather->new();
 $FC->Load();
 $FC->GetForecast('Lakeland');
+$FC->Daily_Parser('Lakeland',{},day=>1);
 say ('The Current weather is ', Describe($FC->{Locations}{$FC->{Alias}{Lakeland}{ID}}{Current}{0}) );
 say ('Today is expected to be ', Describe(ValsOfTime($FC->{Locations}{$FC->{Alias}{Lakeland}{ID}}{Days},q{-12h},q{12h})->[0]) );
 say ('Tommarow is expected to be ', Describe(ValsOfTime($FC->{Locations}{$FC->{Alias}{Lakeland}{ID}}{Days},q{12h},q{12h})->[0]) );
