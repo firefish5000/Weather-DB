@@ -210,7 +210,7 @@ sub Daily_Parser() {
 	$tfc->{LastUpdated}=time;
 	foreach my $DayCast ( $Root->findnodes('//div[@id="detail-day-night"]/div') ) {
 		my $class = $DayCast->findvalue('./@class');
-		my ($MorningOrNight) = $class =~ m{^(day|night)$} or Croak qq{Daily parser got class <$class>, which does not match the known classes of day/night};
+		my ($MorningOrNight) = $class =~ m{(day|night)} or Croak qq{Daily parser got class <$class>, which does not match the known classes of day/night};
 		$MorningOrNight = ($MorningOrNight eq q{day}) ? q{Morning} : q{Night};
 		# Some Daily_tab specific parsers
 		my $Cont = $DayCast->findnodes('.//div[@class="content"]')->[0];
